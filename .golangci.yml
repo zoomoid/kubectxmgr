@@ -1,0 +1,91 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: all
+  disable:
+    - gocyclo # duplicate of cyclop
+    - contextcheck
+    - depguard
+    - err113
+    - exhaustive
+    - exhaustruct
+    - exhaustruct_v5
+    - forcetypeassert
+    - funcorder
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - goconst           # Until `exclude-types` is supported. See below.
+    - godox
+    - gomoddirectives
+    - gomodguard
+    - inamedparam
+    - ireturn
+    - mnd
+    - nilnil
+    - nlreturn
+    - noinlineerr
+    - nonamedreturns
+    - recvcheck
+    - tagliatelle
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  settings:
+    cyclop:
+      max-complexity: 15
+    gosec:
+      excludes:
+        - G101
+        - G402
+    lll:
+      line-length: 180
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+          arguments:
+            - []
+            - []
+            - - skip-package-name-checks: true
+                skip-package-name-collision-with-go-std: true
+    tagliatelle:
+      case:
+        rules:
+          json: pascal
+        use-field-name: true
+  exclusions:
+    generated: lax
+    rules:
+      - path: (.+)\.go$
+        text: 'package-comments: should have a package comment'
+      - path: pkg/cactl/(.+)\.go$
+        linters:
+          - staticcheck
+      - path: (.+)_test\.go$
+        linters:
+          - unparam
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+    golines:
+      max-len: 180
+      reformat-tags: false
+      shorten-comments: true
+      tab-len: 4
+      chain-split-dots: false
+  exclusions:
+    generated: lax
