@@ -65,8 +65,11 @@ fingerprint. Changed scopes/configuration do not silently reuse incompatible
 inventories. Successful empty snapshots are retained. Failed attempts are stored
 separately and cannot replace a complete inventory.
 
-Explicit filesystem credential caches for filesystem/GKE/EKS/AKS stores last one
-hour. Rancher credentials are cached automatically for four minutes because
+Explicit filesystem credential caches for filesystem/GKE/EKS stores last one
+hour. AKS user kubeconfigs are cached automatically for one hour and prefetched
+during normal discovery; execution discovery and dry-run stay metadata-only.
+Configured AKS cache paths override the default private state directory.
+Rancher credentials are cached automatically for four minutes because
 materialization creates tokens. Errors and corrupt caches are reported, not
 treated as successful empty data. `cache clean` removes owned cached credentials;
 it does not revoke remote credentials or remove the saved selection, namespace

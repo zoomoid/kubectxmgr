@@ -296,3 +296,42 @@ func TestCachedGKESelectionUsesClusterNameWithoutCloudCalls(t *testing.T) {
 		require.Equal(t, target.namespace, last.Namespace)
 	}
 }
+
+func TestCachedAKSSelectionWithoutCloudCalls(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("KUBECONFIG", "")
+	configPath := filepath.Join(dir, "switch.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("kind: SwitchConfig\nversion: v1alpha1\nkubeconfigStores:\n- kind: azure\n  id: test\n  config:\n    subscriptionID: sub\n"), 0600))
+	stateDir := filepath.Join(dir, "state")
+	disk := state.Disk{Root: stateDir}
+	resolved, err := config.Load(configPath, "", stateDir)
+	require.NoError(t, err)
+	const resource = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ContainerService/managedClusters/cluster"
+	for _, store := range resolved.Stores {
+		if store.Kind != "azure" {
+			continue
+		}
+
+		ref := state.Reference{
+			ID: store.Key() + ":" + resource, Store: store.Key(), Name: "cluster", Context: "cluster",
+			Metadata: map[string]string{"resourceGroup": "rg", "name": "cluster"},
+		}
+		require.NoError(t, state.Atomic(disk.Path("inventory", store.Key()), state.Snapshot{
+			Version: state.Version, Fingerprint: store.Fingerprint(), Complete: true, Discovered: time.Now(),
+			References: []state.Reference{ref},
+		}))
+		key := ref.ID + store.Fingerprint()
+		require.NoError(t, state.Atomic(disk.Path("credentials", key), state.Credentials{
+			Owner: "kubectxmgr", Key: key, Version: state.Version, Expires: time.Now().Add(time.Hour),
+			Data: testutil.Kubeconfig("development"),
+		}))
+	}
+
+	out, _, err := invoke(t, "--state-directory", stateDir, "--config-path", configPath, "--machine", "set-context", "cluster")
+	require.NoError(t, err)
+	selected, err := clientcmd.LoadFromFile(string(bytes.TrimSpace([]byte(out))))
+	require.NoError(t, err)
+	require.Equal(t, "cluster", selected.CurrentContext)
+	require.Equal(t, "development", selected.Contexts["cluster"].Namespace)
+}

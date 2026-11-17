@@ -21,6 +21,7 @@ func New(options *shared.Options) *cobra.Command {
 				return err
 			}
 
+			engine.PrefetchCredentials = true
 			refs, err := engine.Run(cmd.Context(), due, false)
 			if err != nil {
 				return err

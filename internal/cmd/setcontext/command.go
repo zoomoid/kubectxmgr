@@ -52,6 +52,7 @@ func Run(cmd *cobra.Command, options *shared.Options, name string) error {
 			return err
 		}
 
+		engine.PrefetchCredentials = true
 		_, scanErr := engine.Run(cmd.Context(), false, false)
 		refs, valid = engine.Cached()
 		if scanErr != nil && valid == 0 {

@@ -15,12 +15,17 @@ import (
 type cached struct {
 	Provider
 	store config.Store
+	disk  state.Disk
 }
 
 // Materialize reuses an owned unexpired kubeconfig or publishes a fresh one under
 // a per-reference lock. Configuration changes create a distinct cache identity.
 func (c cached) Materialize(ctx context.Context, r state.Reference) ([]byte, error) {
-	disk := state.Disk{Root: c.store.Cache.Config.Path}
+	disk := c.disk
+	if c.store.Cache != nil {
+		disk.Root = c.store.Cache.Config.Path
+	}
+
 	key := r.ID + c.store.Fingerprint()
 	unlock, err := disk.Lock(ctx, "credential-"+key, true)
 	if err != nil {

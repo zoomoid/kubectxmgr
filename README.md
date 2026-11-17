@@ -1,212 +1,112 @@
 # kubectxmgr
 
-A Go Kubernetes context switcher with cached discovery and offline restoration.
-The executable is named `switcher`.
+A Kubernetes context switcher for GKE, EKS, AKS, Rancher, and local kubeconfigs.
+Inspired by [kubeswitch](https://github.com/danielfoehrkn/kubeswitch), with background
+discovery, cached selection, and offline restoration. The executable is `switcher`.
 
-## Requirements
+> Vast amounts of the code in this repository are generated with AI. Use at your own risk.
 
-- Go 1.27.4 or newer in the Go 1.27 series.
-- Linux or macOS.
-- Provider credentials and the credential helpers listed in [providers](docs/providers.md).
-- golangci-lint v2 for linting and formatting.
-- GoReleaser v2 for release validation and packaging.
+## Setup
 
-The local executable is `./switcher`. `go install ./cmd/switcher` installs it into
-the configured Go binary directory.
+- Supports Linux and macOS.
+- Build with Go 1.27.4 or newer in the Go 1.27 series: `go install ./cmd/switcher`.
+- Configure stores and credentials using the [configuration](docs/configuration.md)
+  and [provider](docs/providers.md) guides.
+- Source the output of `switcher init bash`, `switcher init zsh`, or
+  `switcher init fish` in your shell initialization file.
 
-## Development and release jobs
-
-| Target | Job |
-| --- | --- |
-| `make build` | Build the local `./switcher` executable |
-| `make install` | Install the executable into the configured Go binary directory |
-| `make test` | Run all tests with the race detector |
-| `make coverage` | Run race-enabled tests and write `coverage.out` |
-| `make vet` | Run Go's static checks |
-| `make lint` | Run the configured golangci-lint checks |
-| `make fmt` | Apply all formatters configured in `.golangci.yml` |
-| `make fmt-check` | Report formatting differences and fail without changing files |
-| `make release-check` | Validate `.goreleaser.yml` |
-| `make check` | Run formatting, vet, tests, lint, and release validation |
-| `make snapshot` | Build local release archives and checksums without publishing |
-
-GoReleaser builds CGO-disabled binaries for Linux amd64, Linux arm64, and
-macOS arm64. Each archive contains `switcher` and the documentation. Link-time
-version information is available through both `--version` and `version`.
-Snapshot output is written to the ignored `dist/` directory, which the snapshot
-job replaces. Published releases require a Git tag and GitHub release credentials;
-no CI publishing workflow is configured.
-
-## Code layout
-
-- [`cmd/switcher`](cmd/switcher) contains the executable entry point and signal handling.
-- [`internal/cmd`](internal/cmd) assembles the root command from individual subcommand
-  packages. [`internal/cmd/shared`](internal/cmd/shared) provides flags and lazy runtime
-  dependencies so local restoration does not initialize providers.
-- [`internal/provider`](internal/provider) defines the provider interface, factory, and
-  common credential-cache handling. Implementations and their tests live in separate
-  [`aks`](internal/provider/aks), [`eks`](internal/provider/eks),
-  [`filesystem`](internal/provider/filesystem), [`gke`](internal/provider/gke), and
-  [`rancher`](internal/provider/rancher) packages. A small
-  [`shared`](internal/provider/shared) package preserves consistent inventory identities
-  without coupling the implementations to the factory.
-- Discovery, providers, state, shell integration, and scheduler jobs remain separate
-  from command assembly. Shell and scheduler source templates are documented
-  package-level variables in their respective packages.
-
-## Shell integration
-
-Source the output of `switcher init bash`, `switcher init zsh`, or
-`switcher init fish` from the relevant shell initialization file.
-
-- bash/zsh expose `switch`; fish exposes `kubeswitch` because `switch` is reserved.
-- The shell function exports the selected `KUBECONFIG`. The executable cannot
-  change its parent shell's environment by itself.
-- `switch .` restores the latest successful tool-managed context and namespace.
-- Restoration is local-only, even while discovery is blocked or credentials have
-  expired. No discovery, authentication helper, or namespace query runs.
-- Missing saved state returns an error. Initializing integration does not restore
-  a context or edit shell initialization files automatically.
-- Context selection/restoration creates a private, independent kubeconfig.
-  Namespace changes through the shell wrapper also create an isolated copy.
-  Direct `switcher namespace` calls update the active kubeconfig file so the
-  current shell sees the change without exporting a new environment variable.
-  Other shells sharing that same file see the change too; independent
-  tool-managed session files remain isolated.
-- Generated cloud kubeconfigs use the cluster name as their context name. Rancher
-  uses the cluster's display name when available, not its internal ID. Filesystem
-  contexts keep their source names. Inventory IDs and search labels remain qualified
-  so clusters with the same name can still be selected separately.
-- Reselecting a cluster normalizes its context name even with older inventory.
-  `switch .` preserves the previously saved name and namespace until a new
-  selection is saved.
-- GKE selection uses endpoint and CA metadata collected during discovery without
-  a Google API call. Run `switcher discover` once after upgrading to populate
-  these fields; older snapshots retain a live lookup until refreshed.
-- Session files persist for the shell's lifetime and are not automatically deleted:
-  the application cannot reliably determine when another shell has stopped using
-  a file. Remove only known-unused session files when reclaiming disk space.
+The shell function is `switch` in bash/zsh and `kubeswitch` in fish. Use it for
+context changes: the executable cannot export `KUBECONFIG` into its parent shell.
+Use [background jobs](docs/jobs.md) to schedule discovery with systemd or launchd.
 
 ## Commands
 
 | Command | Behavior |
 | --- | --- |
-| `switcher` | Search complete cached store snapshots; allow first interactive discovery if none exist |
-| `switcher <context>` / `set-context` | Select an unambiguous context name or unique inventory ID |
-| `switcher .` / `restore` | Restore the global last context and namespace from local state |
-| `switcher list-contexts [pattern]` | Print cached inventory as JSON; never discover implicitly |
-| `switcher current-context` | Print the active kubeconfig's current context |
+| `switcher` | Search cached contexts; discover on first interactive use |
+| `switcher <context>` / `set-context <context>` | Select by name or qualified ID |
+| `switcher .` / `restore` | Restore the last context and namespace offline |
+| `switcher namespace [name]` / `ns [name]` | Set a namespace or search cached names |
+| `switcher list-contexts [pattern]` | Print cached inventory as JSON |
+| `switcher current-context` | Print the active context |
 | `switch unset-context` | Unset this shell's `KUBECONFIG` |
-| `switcher namespace [name]` / `ns` | Set the active namespace; search cached namespaces by recent use with background refresh |
-| `switcher discover` | Force discovery of all configured store scopes |
-| `switcher discover --due` | Refresh only due/missing inventories; skip busy stores |
-| `switcher discovery status` | Print per-store inventory and last-attempt state as JSON |
-| `switcher exec <pattern> -- <command> [args...]` | Fresh complete discovery, then sequential execution |
-| `switcher exec --dry-run [--json] <pattern> -- <command> [args...]` | Print targets and exact argv; do not generate credentials or run the command |
-| `switcher jobs template/install/uninstall/status` | Manage per-user background discovery |
-| `switcher cache clean` | Remove owned credential-cache entries; keep last-selection and session state |
-| `switcher completion <shell>` | Generate command completion |
+| `switcher discover` | Refresh all configured stores |
+| `switcher discover --due` | Refresh due/missing inventories; skip busy stores |
+| `switcher discovery status` | Print discovery status as JSON |
+| `switcher exec <pattern> -- <command> [args...]` | Discover, then execute sequentially |
+| `switcher exec --dry-run [--json] <pattern> -- <command> [args...]` | Discover and print planned commands without running them |
+| `switcher jobs template/install/uninstall/status` | Manage background discovery |
+| `switcher cache clean` | Remove credential-cache entries, not saved sessions |
+| `switcher completion <shell>` | Generate completions |
 
-Use the shell function instead of the executable for commands that must update the
-current shell environment. Context selection, restoration, and namespace changes
-are silent by default. `-v` / `--verbose` prints the selected context, namespace,
-and kubeconfig path. `--machine` prints only that path, even with `--verbose`.
-`--help` lists flags for each command.
+Selection is silent by default. `-v` / `--verbose` shows the context, namespace,
+and kubeconfig path; `--machine` prints only the path. Use `--help` for all flags.
 
-Fuzzy search is the TUI default. Tab toggles fuzzy and RE2-compatible regex
-matching; `--regex` starts in regex mode. The TUI supports arrow keys, Ctrl-J/K,
-Enter, Escape, and Ctrl-C. Results grow upward above a fixed `>` prompt, separated
-by a blank line, with the best match nearest the prompt. Up/Ctrl-K moves up the
-list and Down/Ctrl-J moves back toward the prompt. The match count and current
-search mode appear below the prompt, with another blank line between them.
-Entries show the provider's cluster name followed by the qualified inventory ID
-in brackets. Provider-specific labels also work with older cached inventories,
-without API calls or changes to connection data. Search matches readable labels,
-qualified inventory names, and IDs. The TUI has no kubeconfig preview pane.
-The picker uses Bubbles input/viewport components and Lip Gloss styling. Long
-entries are clipped to terminal width. It runs in the alternate screen and
-restores the original terminal contents on selection, cancellation, or error.
-Escape and Ctrl-C cancel silently with exit status 130.
-Execution and noninteractive listing use glob patterns by default; `*` matches across `/`.
-`--regex` selects regex matching explicitly. Quote patterns in the calling shell.
+### Search
 
-## Namespace caching
+- Fuzzy search by default; Tab toggles RE2 regex, and `--regex` starts in regex mode.
+- Arrow keys or Ctrl-J/K navigate; Enter selects; Escape/Ctrl-C cancel.
+- Search cluster names or qualified IDs. Results appear above the prompt, and the
+  picker leaves no terminal output behind.
+- Noninteractive patterns use globs by default. Quote them to prevent shell expansion.
 
-- Namespace inventories and recent selections are stored per cluster connection,
-  independently of context aliases or session file names.
-- Reselecting a cluster restores its most recently selected namespace from this
-  cache without an API query. With no saved namespace, the source kubeconfig's
-  namespace is preserved, or `default` is used when absent.
-- Cached names open immediately, even when stale. Each invocation starts a
-  detached refresh that continues after the picker or foreground command exits.
-  A cold cache needs one initial live fetch before opening the picker.
-- Most recently selected namespaces come first, with alphabetical ordering for
-  unused namespaces. The most recent entry appears nearest the bottom prompt.
-  Fuzzy relevance still takes priority while searching; regex preserves recency.
-- Refreshes exhaust every API page before replacing an inventory. Failures retain
-  cached names, and concurrent refreshes for one cluster are skipped. Usage updates
-  merge with refreshes rather than being overwritten.
-- Explicit namespace assignment still works without namespace-list permission.
-  A denied background refresh does not undo the selected namespace.
-- Refresh status and diagnostics are saved under `namespace-status/` and
-  `namespace-logs/` in the state directory. A failed refresh is reported when
-  opening the cached picker again. No provider configuration is read.
+## Caching and sessions
 
-## Discovery guarantees
+- Discovery publishes only complete per-store snapshots. Failed refreshes retain
+  previous data; readers do not wait for discovery locks.
+- AKS discovery prefetches user kubeconfigs into a private one-hour cache so valid
+  selections need no Azure request. Run `switcher discover` once after upgrading.
+- Namespace lists open from cache and refresh in the background. The first uncached
+  lookup waits for the API. Explicit namespace assignment needs no list permission.
+- Namespaces are ordered by recent use. Reselecting a cluster restores its last
+  selected namespace without an API query.
+- Shell-wrapper selections create isolated kubeconfigs. Direct `switcher namespace`
+  updates the active file, affecting other shells that share it.
+- Cloud contexts use friendly cluster names; local contexts keep their source names.
+- Restore does not discover clusters or renew credentials. Reselect the context
+  when credentials expire.
+- Session files are not automatically deleted. Remove only files no longer in use.
 
-- Each store publishes a snapshot only after all of its configured scopes,
-  pages, and required detail requests succeed. An empty complete scan is valid.
-- A failed store retains its last complete snapshot. Other successful stores
-  publish independently. This is not a globally transactional cloud inventory.
-- Cached selection is immediately available and reports stale/missing/failed
-  stores. Cloud credentials may be fetched after choosing a remote context.
-- `required:false` makes ordinary discovery failure a warning. It never allows
-  incomplete results to replace a store snapshot.
-- Both execution and dry-run require a fresh, complete scan of **every**
-  configured store, including optional stores. No command starts on partial discovery.
-- “Complete” covers configured scopes visible to the authenticated identity,
-  not inaccessible accounts, projects, subscriptions, regions, or clusters.
-- Concurrent processes use per-store advisory locks and atomic file replacement.
-  Readers do not wait for discovery locks. Explicit discovery waits cancellably;
-  scheduled discovery skips busy stores.
+Execution and dry-run require fresh, complete discovery of every configured store.
+Execution preserves arguments without an implicit shell and stops on the first failure.
+Dry-run may authenticate to discovery APIs but does not generate kubeconfigs, run
+commands, or change the saved selection.
 
-Execution preserves argv without an implicit shell. If legacy `execShell` is set,
-exactly one script argument must follow `--`. Execution stops on the first failure,
-propagates nonzero child status, and leaves global last-selection state unchanged.
-Dry-run may authenticate to discovery APIs and publish complete inventories, but
-does not create kubeconfigs, issue Rancher tokens, invoke Kubernetes authentication
-plugins, execute the appended command, or change the saved selection.
+## Configuration
 
-## Configuration and state
+- Config: `~/.kube/switch-config.yaml`
+- State: `~/.kube/kubectxmgr`
+- Discovery defaults: 15-minute refresh age, four concurrent stores, two-minute
+  timeout per store.
+
+State contains credentials and saved kubeconfigs. Directories use `0700` and files
+use `0600`; credentials are **not encrypted**.
 
 See [configuration](docs/configuration.md), [providers](docs/providers.md), and
-[background jobs](docs/jobs.md).
+[background jobs](docs/jobs.md) for details.
 
-Defaults:
+## Development
 
-- Configuration: `~/.kube/switch-config.yaml`.
-- State: `~/.kube/kubectxmgr`.
-- Refresh age: 15 minutes.
-- Discovery concurrency: four stores; each provider scans its pages/scopes
-  sequentially to bound API pressure.
-- Store timeout: two minutes.
-- Namespace listing timeout: 15 seconds; no persistent namespace cache.
+| Target | Job |
+| --- | --- |
+| `make build` / `make install` | Build locally / install |
+| `make test` / `make coverage` | Race-enabled tests / coverage |
+| `make fmt` / `make fmt-check` | Format / check formatting |
+| `make vet` / `make lint` | Static checks / lint |
+| `make check` | All checks, including release configuration |
+| `make release-check` / `make snapshot` | Validate / build release archives |
 
-State includes discovery metadata, credential caches, and the saved kubeconfig.
-New directories use `0700`; state files use `0600`. Existing shared scheduler
-directories are not chmodded. Credential files are **not encrypted**.
-Protect the state directory and any configured credential-cache directory.
-Expired saved credentials are not renewed by restore; reselect the context
-explicitly to obtain fresh credentials.
+Formatting and linting require golangci-lint v2; releases require GoReleaser v2.
+Release targets are Linux amd64/arm64 and macOS arm64.
+
+CLI packages live in [`internal/cmd`](internal/cmd), provider implementations in
+[`internal/provider`](internal/provider), and the entry point in
+[`cmd/switcher`](cmd/switcher).
 
 ## Compatibility
 
-The supported-provider `SwitchConfig` format is retained; the legacy CLI/shell
-response protocol and old indexes/history are not. Existing config files are never
-rewritten. Alias commands, history navigation, preview panes, hooks, plugins,
-unsupported providers, and source-context deletion are not implemented.
+Retains `SwitchConfig` for supported providers without rewriting existing files.
+Legacy shell protocols, indexes, aliases, history navigation, preview panes, hooks,
+and plugins are not supported.
 
-Cloud integrations are tested with SDK-backed fake APIs, not certified against
-live cloud accounts. Tests cover failed pages, partial results, atomic publication,
-cross-process locking, namespace restoration, dry-run, and scheduler lifecycle
-operations without installing jobs in the developer's user session.
+Cloud integrations are tested with fake APIs, not certified against live accounts.

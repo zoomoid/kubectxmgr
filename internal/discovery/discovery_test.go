@@ -71,3 +71,94 @@ func TestDueAndCancelledDiscovery(t *testing.T) {
 	_, err = e.Run(ctx, false, true)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+type prefetchProvider struct {
+	fakeProvider
+	materialized []string
+	prefetchErr  error
+}
+
+func (p *prefetchProvider) Materialize(_ context.Context, ref state.Reference) ([]byte, error) {
+	p.materialized = append(p.materialized, ref.ID)
+	return []byte("private kubeconfig"), p.prefetchErr
+}
+
+func TestAKSPrefetchIsSeparateFromMetadataOnlyDiscovery(t *testing.T) {
+	for _, tt := range []struct {
+		name                 string
+		prefetch, exhaustive bool
+	}{
+		{name: "metadata only", exhaustive: true},
+		{name: "normal discovery", prefetch: true},
+		{name: "exhaustive disables prefetch", prefetch: true, exhaustive: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Kind: "SwitchConfig", Version: "v1alpha1", Stores: []config.Store{{
+				Kind: "azure", Config: config.Settings{SubscriptionID: "sub"},
+			}}}
+			require.NoError(t, cfg.Validate())
+			store := cfg.Stores[0]
+			p := &prefetchProvider{fakeProvider: fakeProvider{refs: []state.Reference{
+				{ID: "one", Store: store.Key(), Metadata: map[string]string{"name": "one"}},
+				{ID: "two", Store: store.Key(), Metadata: map[string]string{"name": "two"}},
+			}}}
+			disk := state.Disk{Root: t.TempDir()}
+			e := &Engine{
+				Config: cfg, Disk: disk, Log: logging.New(io.Discard, false, false),
+				PrefetchCredentials: tt.prefetch,
+				Factory: func(config.Store) (provider.Provider, error) {
+					return p, nil
+				},
+			}
+			_, err := e.Run(t.Context(), false, tt.exhaustive)
+			require.NoError(t, err)
+			if tt.prefetch && !tt.exhaustive {
+				require.Equal(t, []string{"one", "two"}, p.materialized)
+			} else {
+				require.Empty(t, p.materialized)
+			}
+
+			snapshot, err := disk.Snapshot(store.Key(), store.Fingerprint())
+			require.NoError(t, err)
+			require.Equal(t, p.refs, snapshot.References)
+			raw, err := os.ReadFile(disk.Path("inventory", store.Key()))
+			require.NoError(t, err)
+			require.NotContains(t, string(raw), "private kubeconfig")
+		})
+	}
+}
+
+func TestAKSPrefetchFailureRetainsCompleteInventory(t *testing.T) {
+	cfg := &config.Config{Kind: "SwitchConfig", Version: "v1alpha1", Stores: []config.Store{{
+		Kind: "azure", Config: config.Settings{SubscriptionID: "sub"},
+	}}}
+	require.NoError(t, cfg.Validate())
+	store := cfg.Stores[0]
+	disk := state.Disk{Root: t.TempDir()}
+	path := disk.Path("inventory", store.Key())
+	require.NoError(t, state.Atomic(path, state.Snapshot{
+		Version: state.Version, Fingerprint: store.Fingerprint(), Complete: true,
+		Discovered: time.Now(), References: []state.Reference{{ID: "old", Store: store.Key()}},
+	}))
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	p := &prefetchProvider{
+		fakeProvider: fakeProvider{refs: []state.Reference{{ID: "new", Store: store.Key()}}},
+		prefetchErr:  errors.New("user kubeconfig denied"),
+	}
+	e := &Engine{
+		Config: cfg, Disk: disk, Log: logging.New(io.Discard, false, false),
+		PrefetchCredentials: true,
+		Factory: func(config.Store) (provider.Provider, error) {
+			return p, nil
+		},
+	}
+	_, err = e.Run(t.Context(), false, false)
+	require.ErrorContains(t, err, "user kubeconfig denied")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	status, err := state.Read[state.Status](disk.Path("status", store.Key()))
+	require.NoError(t, err)
+	require.Equal(t, "failed", status.State)
+}

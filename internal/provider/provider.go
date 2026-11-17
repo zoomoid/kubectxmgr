@@ -17,14 +17,15 @@ import (
 	"github.com/zoomoid/kubectxmgr/internal/state"
 )
 
-// Provider separates exhaustive inventory from potentially credential-issuing work.
+// Provider separates metadata discovery from potentially credential-issuing work.
 type Provider interface {
 	// Discover returns all visible references in the configured scope or an error.
 	// Partial results must not be reported as a successful inventory.
 	Discover(context.Context) ([]state.Reference, error)
 
 	// Materialize obtains kubeconfig bytes for a previously discovered reference.
-	// Discovery and execution dry-run must never call this method.
+	// Normal discovery may prefetch private AKS entries; execution discovery and
+	// dry-run must never call this method.
 	Materialize(context.Context, state.Reference) ([]byte, error)
 }
 
@@ -45,7 +46,7 @@ func NewEntry(ref state.Reference) shared.Entry {
 	}
 }
 
-// NewFactory wires supported providers and optional credential caching.
+// NewFactory wires providers with automatic AKS and optional credential caching.
 // Filesystem discovery excludes application state and supplied cache directories;
 // Rancher manages its own short-lived cache to avoid duplicate token issuance.
 func NewFactory(disk state.Disk, log *slog.Logger, excluded ...string) Factory {
@@ -69,8 +70,8 @@ func NewFactory(disk state.Disk, log *slog.Logger, excluded ...string) Factory {
 			return nil, fmt.Errorf("unsupported store %s", s.Kind)
 		}
 
-		if s.Cache != nil {
-			p = cached{Provider: p, store: s}
+		if s.Cache != nil || s.Kind == "azure" {
+			p = cached{Provider: p, store: s, disk: disk}
 		}
 
 		return p, nil

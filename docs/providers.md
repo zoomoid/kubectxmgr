@@ -81,8 +81,20 @@ Azure authentication.
 Discovery uses current `azidentity` and `armcontainerservice/v9` with all list
 pages. Credentials are obtained noninteractively through the default credential
 chain. Configure environment/workload credentials, or sign into the Azure CLI
-explicitly. Switching requests **user**, never admin, kubeconfigs in current
-exec format. Install current Azure `kubelogin` when required by the cluster.
+explicitly. Normal discovery (including scheduled `discover --due`) prefetches
+**user**, never admin, kubeconfigs in current exec format. Azure's list response
+does not include the CA needed to build these locally. Discovery therefore needs
+permission to list cluster user credentials as well as clusters; a prefetch failure
+retains the previous complete inventory and is reported in discovery status.
+
+User kubeconfigs are cached automatically for one hour in the private state
+directory, or the configured credential-cache directory. Selection reuses valid
+entries without initializing Azure credentials or making an ARM request. Missing
+or expired entries are fetched on selection; run `switcher discover` after upgrading
+to warm existing inventories. Kubeconfigs are never stored in inventory metadata.
+Execution discovery and dry-run do not prefetch credentials.
+Install current Azure `kubelogin` when required by the cluster; its authentication
+runs when a Kubernetes client uses the kubeconfig, not during selection.
 
 ## Rancher
 

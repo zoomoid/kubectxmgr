@@ -22,6 +22,9 @@ type Engine struct {
 	Disk    state.Disk
 	Factory provider.Factory
 	Log     *slog.Logger
+	// PrefetchCredentials warms private AKS kubeconfigs during normal discovery.
+	// Execution and dry-run leave this disabled to keep discovery metadata-only.
+	PrefetchCredentials bool
 }
 
 // Result records one store scan, including refreshes skipped by scheduled discovery.
@@ -34,7 +37,7 @@ type Result struct {
 
 // scan holds the store lock across freshness checking, discovery, and publication.
 // Status is separate from inventory so a failed scan cannot invalidate old readers.
-func (e *Engine) scan(ctx context.Context, s config.Store, due bool) (refs []state.Reference, skipped bool, err error) {
+func (e *Engine) scan(ctx context.Context, s config.Store, due, prefetch bool) (refs []state.Reference, skipped bool, err error) {
 	unlock, err := e.Disk.Lock(ctx, "discover-"+s.Key(), !due)
 	if errors.Is(err, state.ErrBusy) && due {
 		e.Log.Info("discovery skipped: store busy", "store", s.Key())
@@ -102,6 +105,18 @@ func (e *Engine) scan(ctx context.Context, s config.Store, due bool) (refs []sta
 		seen[r.ID] = true
 	}
 
+	if prefetch && s.Kind == "azure" {
+		for _, ref := range refs {
+			if _, err := p.Materialize(runCtx, ref); err != nil {
+				return nil, false, fmt.Errorf("prefetch AKS user kubeconfig for %s: %w", ref.ID, err)
+			}
+		}
+	}
+
+	if err := runCtx.Err(); err != nil {
+		return nil, false, err
+	}
+
 	// Only a successful exhaustive result reaches the inventory replacement.
 	err = state.Atomic(e.Disk.Path("inventory", s.Key()), state.Snapshot{
 		Version: state.Version, Fingerprint: s.Fingerprint(), Complete: true, Discovered: time.Now().UTC(), References: refs,
@@ -115,7 +130,7 @@ func (e *Engine) scan(ctx context.Context, s config.Store, due bool) (refs []sta
 
 // Run scans stores with bounded concurrency and publishes successful stores
 // independently. due skips fresh or busy stores. exhaustive makes even optional
-// store failures fatal, as required before execution and dry-run.
+// store failures fatal and disables credential prefetch for execution and dry-run.
 func (e *Engine) Run(ctx context.Context, due, exhaustive bool) ([]state.Reference, error) {
 	if len(e.Config.Stores) == 0 {
 		return nil, errors.New("no stores configured; configure SwitchConfig or a kubeconfig path")
@@ -127,7 +142,7 @@ func (e *Engine) Run(ctx context.Context, due, exhaustive bool) ([]state.Referen
 	for range min(e.Config.Discovery.Concurrency, len(e.Config.Stores)) {
 		wg.Go(func() {
 			for s := range jobs {
-				refs, skipped, err := e.scan(ctx, s, due)
+				refs, skipped, err := e.scan(ctx, s, due, e.PrefetchCredentials && !exhaustive)
 				results <- Result{Store: s, References: refs, Error: err, Skipped: skipped}
 			}
 		})
