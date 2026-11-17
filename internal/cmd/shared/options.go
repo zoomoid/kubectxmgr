@@ -45,7 +45,7 @@ func (o *Options) Bind(root *cobra.Command) {
 	flags.StringVar(&o.StatePath, "state-directory", "~/.kube/kubectxmgr", "Private application state directory")
 	flags.StringVar(&o.KubePath, "kubeconfig-path", "", "Additional filesystem file or directory")
 	flags.BoolVar(&o.Machine, "machine", false, "Print only the selected kubeconfig path")
-	flags.BoolVarP(&o.Verbose, "verbose", "v", false, "Print selected context, namespace, and kubeconfig path")
+	flags.BoolVarP(&o.Verbose, "verbose", "v", false, "Show selection details and execution discovery logs")
 	flags.StringVar(&o.ShellResult, "shell-result", "", "Write an environment action to a shell-owned response file")
 	_ = flags.MarkHidden("shell-result")
 	flags.BoolVar(&o.Debug, "debug", false, "Enable debug logging")

@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/zoomoid/kubectxmgr/internal/kubeconfig"
+	"github.com/zoomoid/kubectxmgr/internal/logging"
+	"github.com/zoomoid/kubectxmgr/internal/provider"
 	"github.com/zoomoid/kubectxmgr/internal/search"
 	"github.com/zoomoid/kubectxmgr/internal/state"
 )
@@ -87,6 +89,9 @@ func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") +
 // planLineTemplate shows one invocation without claiming a kubeconfig was created.
 var planLineTemplate = "%s namespace=%s KUBECONFIG=<isolated:%s> %s\n"
 
+// targetLineTemplate separates each cluster's command output on stderr.
+var targetLineTemplate = "# %s [%s]: %s"
+
 // Print renders a plan as JSON or readable quoted argv without fetching credentials.
 func Print(w io.Writer, targets []Target, jsonOutput bool) error {
 	if jsonOutput {
@@ -161,6 +166,11 @@ func runOne(ctx context.Context, root string, t Target, materialize Materialize,
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, stderr
 	cleanup := configureProcess(cmd)
 	defer func() { err = errors.Join(err, cleanup()) }()
+
+	header := fmt.Sprintf(targetLineTemplate, provider.NewEntry(t.Reference).Label(), t.Reference.ID, strings.Join(t.Argv, " "))
+	if _, err := fmt.Fprintln(stderr, logging.Muted(stderr, header)); err != nil {
+		return err
+	}
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {

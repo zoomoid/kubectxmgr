@@ -4,10 +4,14 @@ package exec
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 	"github.com/zoomoid/kubectxmgr/internal/cmd/shared"
+	"github.com/zoomoid/kubectxmgr/internal/discovery"
 	"github.com/zoomoid/kubectxmgr/internal/execution"
+	"github.com/zoomoid/kubectxmgr/internal/logging"
+	"github.com/zoomoid/kubectxmgr/internal/state"
 )
 
 // New builds execution and dry-run commands using the same target planner.
@@ -20,6 +24,11 @@ func New(options *shared.Options) *cobra.Command {
 			if cmd.ArgsLenAtDash() != 1 {
 				return errors.New("provide exactly one pattern followed by -- and a command")
 			}
+
+			stderr := cmd.ErrOrStderr()
+			progress := &refreshProgress{out: stderr}
+			cmd.SetErr(progress)
+			defer cmd.SetErr(stderr)
 
 			engine, err := options.Engine(cmd)
 			if err != nil {
@@ -36,7 +45,7 @@ func New(options *shared.Options) *cobra.Command {
 				return err
 			}
 
-			refs, err := engine.Run(cmd.Context(), false, true)
+			refs, err := refresh(cmd, options, engine, progress)
 			if err != nil {
 				return fmt.Errorf("execution requires fresh complete discovery of every store: %w", err)
 			}
@@ -54,11 +63,26 @@ func New(options *shared.Options) *cobra.Command {
 				return errors.New("--json is only supported with --dry-run")
 			}
 
-			return execution.Run(cmd.Context(), engine.Disk.Root, targets, shared.Materializer(engine), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			return execution.Run(cmd.Context(), engine.Disk.Root, targets, shared.Materializer(engine), cmd.InOrStdin(), cmd.OutOrStdout(), stderr)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Discover and print exact target commands without materializing credentials")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print a machine-readable dry-run plan")
 
 	return cmd
+}
+
+// refresh keeps normal execution quiet while preserving verbose discovery logs.
+func refresh(cmd *cobra.Command, options *shared.Options, engine *discovery.Engine, progress *refreshProgress) (refs []state.Reference, err error) {
+	defer func() { err = errors.Join(err, progress.finish()) }()
+
+	if !options.Verbose && !options.Debug {
+		engine.Log = logging.NewLevel(progress, slog.LevelWarn, options.JSONLogs)
+		if !options.JSONLogs {
+			if err := progress.start(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return engine.Run(cmd.Context(), false, true)
 }

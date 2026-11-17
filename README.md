@@ -69,6 +69,8 @@ and kubeconfig path; `--machine` prints only the path. Use `--help` for all flag
 
 Execution and dry-run require fresh, complete discovery of every configured store.
 Execution preserves arguments without an implicit shell and stops on the first failure.
+It shows a temporary refresh spinner and a cluster/command header on stderr;
+`--verbose` also shows discovery logs. Redirected output has no progress or color codes.
 Dry-run may authenticate to discovery APIs but does not generate kubeconfigs, run
 commands, or change the saved selection.
 

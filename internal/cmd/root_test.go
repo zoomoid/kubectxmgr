@@ -78,8 +78,9 @@ func TestDryRunDoesNotMaterializeOrRun(t *testing.T) {
 	source := filepath.Join(dir, "config")
 	marker := filepath.Join(dir, "must-not-exist")
 	require.NoError(t, os.WriteFile(source, testutil.Kubeconfig("source-ns"), 0600))
-	out, _, err := invoke(t, "--state-directory", filepath.Join(dir, "state"), "--kubeconfig-path", source, "exec", "--dry-run", "--json", "*", "--", "touch", marker)
+	out, stderr, err := invoke(t, "--state-directory", filepath.Join(dir, "state"), "--kubeconfig-path", source, "exec", "--dry-run", "--json", "*", "--", "touch", marker)
 	require.NoError(t, err)
+	require.Empty(t, stderr, "redirected dry-run should not contain discovery info or progress escapes")
 	require.Contains(t, out, `"namespace":"source-ns"`)
 	_, err = os.Stat(marker)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -95,8 +96,39 @@ func TestIncompleteOptionalStoreBlocksExecution(t *testing.T) {
 	t.Setenv("KUBECONFIG", "")
 	configPath := filepath.Join(dir, "switch.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte("kind: SwitchConfig\nversion: v1alpha1\nkubeconfigStores:\n- kind: filesystem\n  required: false\n  paths: ["+filepath.Join(dir, "missing")+"]\n"), 0600))
-	_, _, err := invoke(t, "--state-directory", filepath.Join(dir, "state"), "--config-path", configPath, "exec", "--dry-run", "*", "--", "true")
+	_, stderr, err := invoke(t, "--state-directory", filepath.Join(dir, "state"), "--config-path", configPath, "exec", "--dry-run", "*", "--", "true")
 	require.ErrorContains(t, err, "fresh complete discovery")
+	require.Contains(t, stderr, "level=WARN")
+	require.NotContains(t, stderr, "level=INFO")
+}
+
+func TestExecDiscoveryVerbosityAndTargetHeaders(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("KUBECONFIG", "")
+	source := filepath.Join(dir, "config")
+	require.NoError(t, os.WriteFile(source, testutil.Kubeconfig("default"), 0600))
+
+	for _, verbose := range []bool{false, true} {
+		args := []string{"--state-directory", filepath.Join(dir, "state"), "--kubeconfig-path", source, "exec"}
+		if verbose {
+			args = append(args, "--verbose")
+		}
+		args = append(args, "*", "--", "printf", "%s", "two words")
+		out, stderr, err := invoke(t, args...)
+		require.NoError(t, err)
+		require.Equal(t, "two words", out)
+		require.Contains(t, stderr, "# test [filesystem.")
+		require.Contains(t, stderr, "printf %s two words\n")
+		require.NotContains(t, stderr, "\x1b", "redirected output must not contain styling or progress escapes")
+		if verbose {
+			require.Contains(t, stderr, `msg="discovering store"`)
+			require.Contains(t, stderr, `msg="published complete store inventory"`)
+		} else {
+			require.NotContains(t, stderr, "level=INFO")
+			require.NotContains(t, stderr, "Refreshing state")
+		}
+	}
 }
 
 func TestRestoreDoesNotExecuteCredentialHelpers(t *testing.T) {

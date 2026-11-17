@@ -13,6 +13,11 @@ func New(w io.Writer, debug, json bool) *slog.Logger {
 		level = slog.LevelDebug
 	}
 
+	return NewLevel(w, level, json)
+}
+
+// NewLevel configures diagnostics with an explicit minimum severity.
+func NewLevel(w io.Writer, level slog.Level, json bool) *slog.Logger {
 	options := &slog.HandlerOptions{Level: level}
 	if json {
 		return slog.New(slog.NewJSONHandler(w, options))
