@@ -108,8 +108,10 @@ Source the output of `switcher init bash`, `switcher init zsh`, or
 | `switcher completion <shell>` | Generate command completion |
 
 Use the shell function instead of the executable for commands that must update the
-current shell environment. Direct executable selection prints the resulting path.
-`--machine` prints only that path. `--help` lists flags for each command.
+current shell environment. Context selection, restoration, and namespace changes
+are silent by default. `-v` / `--verbose` prints the selected context, namespace,
+and kubeconfig path. `--machine` prints only that path, even with `--verbose`.
+`--help` lists flags for each command.
 
 Fuzzy search is the TUI default. Tab toggles fuzzy and RE2-compatible regex
 matching; `--regex` starts in regex mode. The TUI supports arrow keys, Ctrl-J/K,
@@ -132,6 +134,9 @@ Execution and noninteractive listing use glob patterns by default; `*` matches a
 
 - Namespace inventories and recent selections are stored per cluster connection,
   independently of context aliases or session file names.
+- Reselecting a cluster restores its most recently selected namespace from this
+  cache without an API query. With no saved namespace, the source kubeconfig's
+  namespace is preserved, or `default` is used when absent.
 - Cached names open immediately, even when stale. Each invocation starts a
   detached refresh that continues after the picker or foreground command exits.
   A cold cache needs one initial live fetch before opening the picker.

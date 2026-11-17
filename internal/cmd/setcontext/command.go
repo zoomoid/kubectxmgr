@@ -5,15 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/zoomoid/kubectxmgr/internal/cmd/shared"
 	"github.com/zoomoid/kubectxmgr/internal/kubeconfig"
+	"github.com/zoomoid/kubectxmgr/internal/namespacecache"
 	"github.com/zoomoid/kubectxmgr/internal/provider"
 	"github.com/zoomoid/kubectxmgr/internal/search"
 	"github.com/zoomoid/kubectxmgr/internal/state"
 	"github.com/zoomoid/kubectxmgr/internal/tui"
 	"golang.org/x/term"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // New builds the noninteractive set-context subcommand.
@@ -78,7 +81,32 @@ func Run(cmd *cobra.Command, options *shared.Options, name string) error {
 		return err
 	}
 
-	data, namespace, err := kubeconfig.Select(data, ref.Context, "")
+	cfg, err := clientcmd.Load(data)
+	if err != nil {
+		return err
+	}
+
+	cfg.CurrentContext = ref.Context
+	cache, err := namespacecache.New(engine.Disk, cfg)
+	if err != nil {
+		return err
+	}
+
+	snapshot, err := cache.Load()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	// Usage survives credential refreshes and does not require namespace-list permission.
+	namespace := ""
+	var lastUsed time.Time
+	for name, used := range snapshot.LastUsed {
+		if used.After(lastUsed) || (!used.IsZero() && used.Equal(lastUsed) && name < namespace) {
+			namespace, lastUsed = name, used
+		}
+	}
+
+	data, namespace, err = kubeconfig.Select(data, ref.Context, namespace)
 	if err != nil {
 		return err
 	}

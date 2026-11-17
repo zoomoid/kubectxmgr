@@ -253,4 +253,46 @@ func TestCachedGKESelectionUsesClusterNameWithoutCloudCalls(t *testing.T) {
 	last, err := disk.Last()
 	require.NoError(t, err)
 	require.Equal(t, "cluster-dev", last.Context)
+
+	cache, err := namespacecache.New(disk, selected)
+	require.NoError(t, err)
+	require.NoError(t, cache.RecordUse(t.Context(), "older"))
+	require.NoError(t, cache.RecordUse(t.Context(), "development"))
+
+	// Usage can exist without a namespace inventory when list permission is absent.
+	for _, store := range resolved.Stores {
+		if store.Kind != "gke" {
+			continue
+		}
+
+		snapshot, err := disk.Snapshot(store.Key(), store.Fingerprint())
+		require.NoError(t, err)
+		other := snapshot.References[0]
+		other.ID = store.Key() + ":projects/project/locations/region/clusters/other"
+		other.Name = "other"
+		other.Context = "other"
+		other.Metadata = map[string]string{
+			"resource": "projects/project/locations/region/clusters/other",
+			"endpoint": "https://127.0.0.2", "ca": "Y2E=",
+		}
+		snapshot.References = append(snapshot.References, other)
+		require.NoError(t, state.Atomic(disk.Path("inventory", store.Key()), snapshot))
+	}
+
+	for _, target := range []struct {
+		name      string
+		namespace string
+	}{
+		{name: "other", namespace: "default"},
+		{name: "gke.test:" + resource, namespace: "development"},
+	} {
+		out, _, err := invoke(t, "--state-directory", stateDir, "--config-path", configPath, "--machine", "set-context", target.name)
+		require.NoError(t, err)
+		cfg, err := clientcmd.LoadFromFile(string(bytes.TrimSpace([]byte(out))))
+		require.NoError(t, err)
+		require.Equal(t, target.namespace, cfg.Contexts[cfg.CurrentContext].Namespace)
+		last, err := disk.Last()
+		require.NoError(t, err)
+		require.Equal(t, target.namespace, last.Namespace)
+	}
 }

@@ -32,6 +32,7 @@ type Options struct {
 	KubePath    string
 	ShellResult string
 	Machine     bool
+	Verbose     bool
 	Debug       bool
 	JSONLogs    bool
 	Regex       bool
@@ -44,6 +45,7 @@ func (o *Options) Bind(root *cobra.Command) {
 	flags.StringVar(&o.StatePath, "state-directory", "~/.kube/kubectxmgr", "Private application state directory")
 	flags.StringVar(&o.KubePath, "kubeconfig-path", "", "Additional filesystem file or directory")
 	flags.BoolVar(&o.Machine, "machine", false, "Print only the selected kubeconfig path")
+	flags.BoolVarP(&o.Verbose, "verbose", "v", false, "Print selected context, namespace, and kubeconfig path")
 	flags.StringVar(&o.ShellResult, "shell-result", "", "Write an environment action to a shell-owned response file")
 	_ = flags.MarkHidden("shell-result")
 	flags.BoolVar(&o.Debug, "debug", false, "Enable debug logging")
@@ -96,7 +98,7 @@ func (o *Options) Engine(cmd *cobra.Command) (*discovery.Engine, error) {
 	}, nil
 }
 
-// Report returns a selection through the requested human, machine, or shell channel.
+// Report returns a selection through the requested verbose, machine, or shell channel.
 // The shell response file is separate from stdout so child command output passes through.
 func (o *Options) Report(cmd *cobra.Command, path string, selection state.Selection) error {
 	if strings.ContainsAny(path, "\r\n\x00") {
@@ -104,12 +106,16 @@ func (o *Options) Report(cmd *cobra.Command, path string, selection state.Select
 	}
 
 	if o.ShellResult != "" {
-		return os.WriteFile(o.ShellResult, []byte("set:"+path), 0600)
-	}
-
-	if o.Machine {
+		if err := os.WriteFile(o.ShellResult, []byte("set:"+path), 0600); err != nil {
+			return err
+		}
+	} else if o.Machine {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), path)
 		return err
+	}
+
+	if !o.Verbose {
+		return nil
 	}
 
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), selectionTemplate, selection.Context, selection.Namespace, path)
