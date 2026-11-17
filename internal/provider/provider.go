@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/zoomoid/kubectxmgr/internal/config"
 	"github.com/zoomoid/kubectxmgr/internal/provider/aks"
@@ -12,6 +13,7 @@ import (
 	"github.com/zoomoid/kubectxmgr/internal/provider/filesystem"
 	"github.com/zoomoid/kubectxmgr/internal/provider/gke"
 	"github.com/zoomoid/kubectxmgr/internal/provider/rancher"
+	"github.com/zoomoid/kubectxmgr/internal/provider/shared"
 	"github.com/zoomoid/kubectxmgr/internal/state"
 )
 
@@ -28,6 +30,20 @@ type Provider interface {
 
 // Factory constructs the provider for one validated store without performing discovery.
 type Factory func(config.Store) (Provider, error)
+
+// NewEntry adapts cached inventory for display without configuration or API calls.
+func NewEntry(ref state.Reference) shared.Entry {
+	entry := shared.NewEntry(ref)
+	kind, _, _ := strings.Cut(ref.Store, ".")
+	switch kind {
+	case "gke":
+		return gke.Entry{ReferenceEntry: entry}
+	case "rancher":
+		return rancher.Entry{ReferenceEntry: entry}
+	default:
+		return entry
+	}
+}
 
 // NewFactory wires supported providers and optional credential caching.
 // Filesystem discovery excludes application state and supplied cache directories;

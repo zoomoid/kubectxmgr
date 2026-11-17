@@ -32,6 +32,21 @@ type Rancher struct {
 	HTTP  *http.Client
 }
 
+// Entry presents Rancher's display name while retaining its internal cluster ID.
+type Entry struct {
+	shared.ReferenceEntry
+}
+
+// Label uses the discovered name, even when an older context still holds a cluster ID.
+func (e Entry) Label() string {
+	ref := e.Reference()
+	if name := strings.TrimPrefix(ref.Name, ref.Store+"/"); name != "" {
+		return name
+	}
+
+	return e.ReferenceEntry.Label()
+}
+
 // connection normalizes the server origin and loads its bearer credential.
 func (p *Rancher) connection() (string, string, error) {
 	base := strings.TrimRight(p.Store.Config.RancherAPIAddress, "/")
@@ -118,8 +133,6 @@ func (p *Rancher) Discover(ctx context.Context) ([]state.Reference, error) {
 			}
 
 			r := shared.Reference(p.Store, c.GetName(), name, map[string]string{"cluster": c.GetName()})
-			// RK-API kubeconfigs use the stable cluster ID for currentContext.
-			r.Context = c.GetName()
 			refs = append(refs, r)
 		}
 

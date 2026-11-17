@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zoomoid/kubectxmgr/internal/cmd/shared"
 	"github.com/zoomoid/kubectxmgr/internal/kubeconfig"
+	"github.com/zoomoid/kubectxmgr/internal/provider"
 	"github.com/zoomoid/kubectxmgr/internal/search"
 	"github.com/zoomoid/kubectxmgr/internal/state"
 	"github.com/zoomoid/kubectxmgr/internal/tui"
@@ -68,6 +69,9 @@ func Run(cmd *cobra.Command, options *shared.Options, name string) error {
 	if err != nil {
 		return err
 	}
+
+	// Older inventories may still carry generated context keys instead of names.
+	ref.Context = provider.NewEntry(ref).Label()
 
 	data, err := shared.Materializer(engine)(cmd.Context(), ref)
 	if err != nil {

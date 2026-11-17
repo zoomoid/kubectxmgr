@@ -10,13 +10,24 @@ import (
 
 	"github.com/zoomoid/kubectxmgr/internal/cmd"
 	"github.com/zoomoid/kubectxmgr/internal/execution"
+	"github.com/zoomoid/kubectxmgr/internal/tui"
 )
+
+// version defaults to local development and is replaced by GoReleaser at link time.
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := cmd.New().ExecuteContext(ctx); err != nil {
+	root := cmd.New()
+	root.Version = version
+
+	if err := root.ExecuteContext(ctx); err != nil {
+		if errors.Is(err, tui.ErrCancelled) {
+			os.Exit(130)
+		}
+
 		fmt.Fprintln(os.Stderr, "switcher:", err)
 
 		var exit *execution.ExitError

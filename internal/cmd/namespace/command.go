@@ -1,4 +1,4 @@
-// Package namespace implements live namespace selection for the active shell.
+// Package namespace implements cached namespace selection for the active shell.
 package namespace
 
 import (
@@ -6,26 +6,40 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/zoomoid/kubectxmgr/internal/cmd/shared"
 	"github.com/zoomoid/kubectxmgr/internal/kubeconfig"
+	"github.com/zoomoid/kubectxmgr/internal/logging"
+	"github.com/zoomoid/kubectxmgr/internal/namespacecache"
 	"github.com/zoomoid/kubectxmgr/internal/state"
 	"github.com/zoomoid/kubectxmgr/internal/tui"
 	"golang.org/x/term"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // New builds namespace selection with the ns alias.
 func New(options *shared.Options) *cobra.Command {
-	return &cobra.Command{
+	return newCommand(options, func(cache namespacecache.Cache, cfg *clientcmdapi.Config) error {
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+
+		return cache.Start(executable, cfg.CurrentContext)
+	})
+}
+
+type refreshStarter func(namespacecache.Cache, *clientcmdapi.Config) error
+
+// newCommand allows tests to control process creation without replacing API work.
+func newCommand(options *shared.Options, start refreshStarter) *cobra.Command {
+	var refreshContext string
+	command := &cobra.Command{
 		Use:     "namespace [name]",
 		Aliases: []string{"ns"},
 		Args:    cobra.MaximumNArgs(1),
@@ -35,9 +49,29 @@ func New(options *shared.Options) *cobra.Command {
 				return err
 			}
 
+			if cmd.Flags().Changed("refresh-cache") {
+				if len(args) != 0 {
+					return errors.New("namespace cache refresh does not accept a namespace")
+				}
+
+				return refresh(cmd.Context(), disk, refreshContext)
+			}
+
 			cfg, err := shared.ActiveConfig()
 			if err != nil {
 				return err
+			}
+
+			cache, err := namespacecache.New(disk, cfg)
+			if err != nil {
+				return err
+			}
+
+			log := logging.New(cmd.ErrOrStderr(), options.Debug, options.JSONLogs)
+			startRefresh := func() {
+				if err := start(cache, cfg); err != nil {
+					log.Warn("namespace cache refresh could not start", "error", err)
+				}
 			}
 
 			name := ""
@@ -45,7 +79,7 @@ func New(options *shared.Options) *cobra.Command {
 				// Explicit assignment must work without namespace-list permission.
 				name = args[0]
 			} else {
-				name, err = pick(cmd, options, cfg)
+				name, err = pick(cmd, options, cfg, cache, startRefresh)
 				if err != nil {
 					return err
 				}
@@ -65,58 +99,101 @@ func New(options *shared.Options) *cobra.Command {
 				return err
 			}
 
-			return options.Save(cmd, disk, state.Selection{
+			// A child cannot export into its parent. Direct calls update the active
+			// file; wrappers instead receive an isolated copy through their protocol.
+			if options.ShellResult == "" {
+				if err := kubeconfig.SetNamespace(cfg.CurrentContext, name); err != nil {
+					return err
+				}
+			}
+
+			if err := options.Save(cmd, disk, state.Selection{
 				Context:    cfg.CurrentContext,
 				Namespace:  name,
 				Kubeconfig: data,
-			})
+			}); err != nil {
+				return err
+			}
+
+			if err := cache.RecordUse(cmd.Context(), name); err != nil {
+				return err
+			}
+
+			if len(args) == 1 {
+				startRefresh()
+			}
+
+			return nil
 		},
 	}
+	command.Flags().StringVar(&refreshContext, "refresh-cache", "", "Refresh cached namespaces for a context")
+	_ = command.Flags().MarkHidden("refresh-cache")
+
+	return command
 }
 
-// pick queries every namespace page immediately before opening the picker.
-func pick(cmd *cobra.Command, options *shared.Options, cfg *clientcmdapi.Config) (string, error) {
+// pick serves stale inventories immediately; a cold cache needs one initial scan.
+func pick(cmd *cobra.Command, options *shared.Options, cfg *clientcmdapi.Config, cache namespacecache.Cache, start func()) (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("namespace selection needs a TTY; specify a namespace explicitly")
 	}
 
-	restConfig, err := clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}).ClientConfig()
-	if err != nil {
-		return "", err
-	}
-	restConfig.Timeout = 15 * time.Second
-
-	client, err := kubernetes.NewForConfig(restConfig)
-	if err != nil {
+	snapshot, err := cache.Load()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-	defer cancel()
+	if snapshot.Refreshed.IsZero() {
+		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+		defer cancel()
+		if err := cache.Refresh(ctx, cfg, true); err != nil {
+			return "", err
+		}
 
-	var refs []state.Reference
-	token := ""
-	for {
-		result, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{Limit: 100, Continue: token})
+		snapshot, err = cache.Load()
 		if err != nil {
-			return "", fmt.Errorf("list namespaces (or specify one explicitly): %w", err)
+			return "", err
+		}
+	} else {
+		status, err := state.Read[state.Status](cache.Disk.Path("namespace-status", cache.Key))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if status.State == "failed" {
+			logging.New(cmd.ErrOrStderr(), options.Debug, options.JSONLogs).
+				Warn("last namespace refresh failed; using cached names", "error", status.Error)
 		}
 
-		for _, item := range result.Items {
-			refs = append(refs, state.Reference{ID: item.Name, Name: item.Name})
-		}
-
-		token = result.Continue
-		if token == "" {
-			break
-		}
+		start()
 	}
 
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
-	selected, err := tui.Pick(cmd.Context(), refs, options.Regex)
+	selected, err := tui.Pick(cmd.Context(), snapshot.References(), options.Regex)
 	if err != nil {
 		return "", err
 	}
 
 	return selected.Name, nil
+}
+
+// refresh runs in a detached CLI process and never changes namespace or selection.
+func refresh(ctx context.Context, disk state.Disk, contextName string) error {
+	cfg, err := clientcmd.NewDefaultClientConfigLoadingRules().Load()
+	if err != nil {
+		return err
+	}
+
+	cfg.CurrentContext = contextName
+	cache, err := namespacecache.New(disk, cfg)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	err = cache.Refresh(ctx, cfg, false)
+	if errors.Is(err, state.ErrBusy) {
+		return nil
+	}
+
+	return err
 }

@@ -42,6 +42,8 @@ func TestRancherRKAPIAndCredentialCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, refs, 2)
 	require.Zero(t, posts.Load(), "discovery must not issue tokens")
+	require.Equal(t, "dev", refs[1].Context)
+	require.Equal(t, "downstream", refs[1].Metadata["cluster"])
 
 	for range 2 {
 		data, err := p.Materialize(t.Context(), refs[0])

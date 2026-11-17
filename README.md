@@ -8,11 +8,34 @@ The executable is named `switcher`.
 - Go 1.27.4 or newer in the Go 1.27 series.
 - Linux or macOS.
 - Provider credentials and the credential helpers listed in [providers](docs/providers.md).
-- golangci-lint v2 for linting.
+- golangci-lint v2 for linting and formatting.
+- GoReleaser v2 for release validation and packaging.
 
-Build with `make build`, test with `make test`, and lint with `make lint`.
 The local executable is `./switcher`. `go install ./cmd/switcher` installs it into
-the configured Go binary directory. Release automation is not configured.
+the configured Go binary directory.
+
+## Development and release jobs
+
+| Target | Job |
+| --- | --- |
+| `make build` | Build the local `./switcher` executable |
+| `make install` | Install the executable into the configured Go binary directory |
+| `make test` | Run all tests with the race detector |
+| `make coverage` | Run race-enabled tests and write `coverage.out` |
+| `make vet` | Run Go's static checks |
+| `make lint` | Run the configured golangci-lint checks |
+| `make fmt` | Apply all formatters configured in `.golangci.yml` |
+| `make fmt-check` | Report formatting differences and fail without changing files |
+| `make release-check` | Validate `.goreleaser.yml` |
+| `make check` | Run formatting, vet, tests, lint, and release validation |
+| `make snapshot` | Build local release archives and checksums without publishing |
+
+GoReleaser builds CGO-disabled binaries for Linux amd64, Linux arm64, and
+macOS arm64. Each archive contains `switcher` and the documentation. Link-time
+version information is available through both `--version` and `version`.
+Snapshot output is written to the ignored `dist/` directory, which the snapshot
+job replaces. Published releases require a Git tag and GitHub release credentials;
+no CI publishing workflow is configured.
 
 ## Code layout
 
@@ -44,8 +67,22 @@ Source the output of `switcher init bash`, `switcher init zsh`, or
   expired. No discovery, authentication helper, or namespace query runs.
 - Missing saved state returns an error. Initializing integration does not restore
   a context or edit shell initialization files automatically.
-- Each selection/restore creates a private, independent kubeconfig. Source files
-  and other shells' kubeconfigs are not changed.
+- Context selection/restoration creates a private, independent kubeconfig.
+  Namespace changes through the shell wrapper also create an isolated copy.
+  Direct `switcher namespace` calls update the active kubeconfig file so the
+  current shell sees the change without exporting a new environment variable.
+  Other shells sharing that same file see the change too; independent
+  tool-managed session files remain isolated.
+- Generated cloud kubeconfigs use the cluster name as their context name. Rancher
+  uses the cluster's display name when available, not its internal ID. Filesystem
+  contexts keep their source names. Inventory IDs and search labels remain qualified
+  so clusters with the same name can still be selected separately.
+- Reselecting a cluster normalizes its context name even with older inventory.
+  `switch .` preserves the previously saved name and namespace until a new
+  selection is saved.
+- GKE selection uses endpoint and CA metadata collected during discovery without
+  a Google API call. Run `switcher discover` once after upgrading to populate
+  these fields; older snapshots retain a live lookup until refreshed.
 - Session files persist for the shell's lifetime and are not automatically deleted:
   the application cannot reliably determine when another shell has stopped using
   a file. Remove only known-unused session files when reclaiming disk space.
@@ -60,7 +97,7 @@ Source the output of `switcher init bash`, `switcher init zsh`, or
 | `switcher list-contexts [pattern]` | Print cached inventory as JSON; never discover implicitly |
 | `switcher current-context` | Print the active kubeconfig's current context |
 | `switch unset-context` | Unset this shell's `KUBECONFIG` |
-| `switcher ns [namespace]` | Query namespaces live, or set a namespace explicitly without list permission |
+| `switcher namespace [name]` / `ns` | Set the active namespace; search cached namespaces by recent use with background refresh |
 | `switcher discover` | Force discovery of all configured store scopes |
 | `switcher discover --due` | Refresh only due/missing inventories; skip busy stores |
 | `switcher discovery status` | Print per-store inventory and last-attempt state as JSON |
@@ -76,9 +113,39 @@ current shell environment. Direct executable selection prints the resulting path
 
 Fuzzy search is the TUI default. Tab toggles fuzzy and RE2-compatible regex
 matching; `--regex` starts in regex mode. The TUI supports arrow keys, Ctrl-J/K,
-Enter, Escape, and Ctrl-C. It has no kubeconfig preview pane. Execution and
-noninteractive listing use glob patterns by default; `*` matches across `/`.
+Enter, Escape, and Ctrl-C. Results grow upward above a fixed `>` prompt, separated
+by a blank line, with the best match nearest the prompt. Up/Ctrl-K moves up the
+list and Down/Ctrl-J moves back toward the prompt. The match count and current
+search mode appear below the prompt, with another blank line between them.
+Entries show the provider's cluster name followed by the qualified inventory ID
+in brackets. Provider-specific labels also work with older cached inventories,
+without API calls or changes to connection data. Search matches readable labels,
+qualified inventory names, and IDs. The TUI has no kubeconfig preview pane.
+The picker uses Bubbles input/viewport components and Lip Gloss styling. Long
+entries are clipped to terminal width. It runs in the alternate screen and
+restores the original terminal contents on selection, cancellation, or error.
+Escape and Ctrl-C cancel silently with exit status 130.
+Execution and noninteractive listing use glob patterns by default; `*` matches across `/`.
 `--regex` selects regex matching explicitly. Quote patterns in the calling shell.
+
+## Namespace caching
+
+- Namespace inventories and recent selections are stored per cluster connection,
+  independently of context aliases or session file names.
+- Cached names open immediately, even when stale. Each invocation starts a
+  detached refresh that continues after the picker or foreground command exits.
+  A cold cache needs one initial live fetch before opening the picker.
+- Most recently selected namespaces come first, with alphabetical ordering for
+  unused namespaces. The most recent entry appears nearest the bottom prompt.
+  Fuzzy relevance still takes priority while searching; regex preserves recency.
+- Refreshes exhaust every API page before replacing an inventory. Failures retain
+  cached names, and concurrent refreshes for one cluster are skipped. Usage updates
+  merge with refreshes rather than being overwritten.
+- Explicit namespace assignment still works without namespace-list permission.
+  A denied background refresh does not undo the selected namespace.
+- Refresh status and diagnostics are saved under `namespace-status/` and
+  `namespace-logs/` in the state directory. A failed refresh is reported when
+  opening the cached picker again. No provider configuration is read.
 
 ## Discovery guarantees
 

@@ -69,7 +69,14 @@ Explicit filesystem credential caches for filesystem/GKE/EKS/AKS stores last one
 hour. Rancher credentials are cached automatically for four minutes because
 materialization creates tokens. Errors and corrupt caches are reported, not
 treated as successful empty data. `cache clean` removes owned cached credentials;
-it does not revoke remote credentials or remove the saved selection.
+it does not revoke remote credentials or remove the saved selection, namespace
+inventories, or namespace recency.
+
+Namespace caches are independent of provider discovery. They are keyed by cluster
+connection settings, with a most-recent-use timestamp for each selected namespace.
+A cached picker refreshes asynchronously, including after the command exits.
+Only complete namespace scans replace inventories; failed refreshes retain stale
+names. A missing inventory requires one initial synchronous scan.
 
 The saved selection is one atomically published YAML document containing context,
 namespace, and kubeconfig. No append-only history is kept. The latest successful

@@ -66,6 +66,29 @@ func File(path string) ([]byte, error) {
 	return clientcmd.Write(*cfg)
 }
 
+// SetNamespace updates only the active context in its original kubeconfig file.
+// The client-go writer preserves merged-file origins and coordinates file locks.
+func SetNamespace(expectedContext, namespace string) error {
+	access := clientcmd.NewDefaultPathOptions()
+	cfg, err := access.GetStartingConfig()
+	if err != nil {
+		return err
+	}
+
+	if cfg.CurrentContext != expectedContext {
+		return errors.New("active context changed during namespace selection; try again")
+	}
+
+	current := cfg.Contexts[cfg.CurrentContext]
+	if current == nil {
+		return errors.New("no active kubeconfig context")
+	}
+
+	current.Namespace = namespace
+
+	return clientcmd.ModifyConfig(access, *cfg, false)
+}
+
 // Generate builds a single-context config using an exec credential plugin.
 // ca is base64-encoded; an empty CA uses the operating system's trust roots.
 func Generate(name, endpoint, ca string, exec *api.ExecConfig) ([]byte, error) {

@@ -1,4 +1,4 @@
-// Package shared provides inventory identity construction for provider implementations.
+// Package shared provides inventory identity and presentation for provider implementations.
 package shared
 
 import (

@@ -38,6 +38,18 @@ Discovery uses Resource Manager v3 and Container v1, enumerates all project page
 and lists all cluster locations. A nonempty GKE `missingZones` response is
 incomplete even when HTTP/gRPC succeeded. Missing preferred endpoints are errors.
 DNS endpoints use system TLS roots; IP endpoints use the cluster CA.
+Discovery persists the selected endpoint and public CA alongside the resource
+identity. Selection builds kubeconfigs locally from that metadata without loading
+Google credentials or fetching the cluster again; authentication runs only when a
+Kubernetes client invokes the configured plugin. Refresh discovery when endpoints
+or CAs change; configured credential-cache lifetimes still apply.
+Older inventories without connection metadata
+still use a live lookup until refreshed with `switcher discover`.
+Selected kubeconfigs use the cluster name alone as their context name, while
+inventory IDs and qualified search labels retain project and location information.
+The picker derives its bare cluster label from the canonical resource name, so
+older cached kubeconfig context prefixes do not appear in the visible label or a
+newly selected kubeconfig.
 
 ## EKS
 
@@ -86,6 +98,12 @@ The default integration uses supported RK-API:
 - Capture the one-time `status.value` from creation immediately.
 - Request five-minute credentials and cache them for four minutes.
 - Keep each server's `local` cluster distinct through its store identity.
+
+Selected kubeconfigs use the cluster display name when present, falling back to
+the cluster ID only when no display name exists. Credential API requests still use
+the stable cluster ID; renaming the local context does not change the target.
+The picker uses the discovered display name even when an older cached context
+still contains the internal cluster ID.
 
 The public Kubeconfig API requires Rancher 2.12 or newer with the feature enabled
 and an active Rancher user permitted to create Kubeconfig resources. A server may

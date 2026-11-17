@@ -30,6 +30,26 @@ type GKE struct {
 	ClientOptions []option.ClientOption
 }
 
+// Entry presents a GKE cluster independently of its generated kubeconfig context.
+type Entry struct {
+	shared.ReferenceEntry
+}
+
+// Label extracts the cluster name from its canonical resource, including old inventories.
+func (e Entry) Label() string {
+	ref := e.Reference()
+	resource := ref.Metadata["resource"]
+	if resource == "" {
+		_, resource, _ = strings.Cut(ref.ID, ":")
+	}
+
+	if _, name, ok := strings.Cut(resource, "/clusters/"); ok && name != "" {
+		return name
+	}
+
+	return e.ReferenceEntry.Label()
+}
+
 type gcloudToken struct {
 	ctx     context.Context
 	account string
@@ -136,8 +156,17 @@ func (p *GKE) Discover(ctx context.Context) ([]state.Reference, error) {
 				return nil, errors.New("GKE returned a cluster without a location")
 			}
 
+			endpoint, ca, err := clusterConnection(cluster, p.Store.Config.PreferredEndpoint)
+			if err != nil {
+				return nil, err
+			}
+
 			id := "projects/" + project + "/locations/" + location + "/clusters/" + cluster.GetName()
-			r := shared.Reference(p.Store, id, "gke_"+project+"_"+location+"_"+cluster.GetName(), map[string]string{"resource": id})
+			r := shared.Reference(p.Store, id, "gke_"+project+"_"+location+"_"+cluster.GetName(), map[string]string{
+				"resource": id, "endpoint": endpoint, "ca": ca,
+			})
+			// Search labels stay qualified; isolated kubeconfigs use the cluster name.
+			r.Context = cluster.GetName()
 			refs = append(refs, r)
 		}
 	}
@@ -170,29 +199,54 @@ func gkeEndpoint(c *pb.Cluster, preference string) (string, error) {
 	return "https://" + endpoint, nil
 }
 
-// Materialize refreshes cluster connection settings and configures the GKE auth
-// plugin without running it. DNS endpoints use system roots; IP endpoints require
-// the cluster CA. The plugin receives the same explicit identity as discovery.
+// clusterConnection validates the selected endpoint and its public trust settings.
+func clusterConnection(c *pb.Cluster, preference string) (string, string, error) {
+	endpoint, err := gkeEndpoint(c, preference)
+	if err != nil {
+		return "", "", err
+	}
+
+	ca := c.GetMasterAuth().GetClusterCaCertificate()
+	if preference == "dns" {
+		ca = ""
+	} else if ca == "" {
+		return "", "", errors.New("GKE returned no cluster CA for its IP endpoint")
+	}
+
+	return endpoint, ca, nil
+}
+
+// Materialize uses discovered public connection settings without authenticating
+// to Google or running the GKE auth plugin. Older inventories retain a live lookup
+// until discovery refreshes them with endpoint and CA metadata.
 func (p *GKE) Materialize(ctx context.Context, r state.Reference) ([]byte, error) {
-	options, err := p.options(ctx)
-	if err != nil {
-		return nil, err
+	endpoint, hasEndpoint := r.Metadata["endpoint"]
+	ca, hasCA := r.Metadata["ca"]
+	if !hasEndpoint || !hasCA {
+		options, err := p.options(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		client, err := container.NewClusterManagerClient(ctx, options...)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = client.Close() }()
+
+		c, err := client.GetCluster(ctx, &pb.GetClusterRequest{Name: r.Metadata["resource"]})
+		if err != nil {
+			return nil, err
+		}
+
+		endpoint, ca, err = clusterConnection(c, p.Store.Config.PreferredEndpoint)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	client, err := container.NewClusterManagerClient(ctx, options...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = client.Close() }()
-
-	c, err := client.GetCluster(ctx, &pb.GetClusterRequest{Name: r.Metadata["resource"]})
-	if err != nil {
-		return nil, err
-	}
-
-	endpoint, err := gkeEndpoint(c, p.Store.Config.PreferredEndpoint)
-	if err != nil {
-		return nil, err
+	if endpoint == "" || (p.Store.Config.PreferredEndpoint != "dns" && ca == "") {
+		return nil, errors.New("GKE inventory has invalid endpoint/CA metadata; run switcher discover")
 	}
 
 	credential := &api.ExecConfig{
@@ -214,13 +268,6 @@ func (p *GKE) Materialize(ctx context.Context, r state.Reference) ([]byte, error
 
 		credential.Args = []string{"--use_application_default_credentials"}
 		credential.Env = []api.ExecEnvVar{{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: path}}
-	}
-
-	ca := c.GetMasterAuth().GetClusterCaCertificate()
-	if p.Store.Config.PreferredEndpoint == "dns" {
-		ca = ""
-	} else if ca == "" {
-		return nil, errors.New("GKE returned no cluster CA for its IP endpoint")
 	}
 
 	return kubeconfig.Generate(r.Context, endpoint, ca, credential)
