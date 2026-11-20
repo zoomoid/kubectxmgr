@@ -69,8 +69,9 @@ Explicit filesystem credential caches for filesystem/GKE/EKS stores last one
 hour. AKS user kubeconfigs are cached automatically for one hour and prefetched
 during normal discovery; execution discovery and dry-run stay metadata-only.
 Configured AKS cache paths override the default private state directory.
-Rancher credentials are cached automatically for four minutes because
-materialization creates tokens. Errors and corrupt caches are reported, not
+Rancher RK-API credentials are cached until shortly before their server-issued
+TTL elapses; legacy Rancher credentials are cached for four minutes.
+Errors and corrupt caches are reported, not
 treated as successful empty data. `cache clean` removes owned cached credentials;
 it does not revoke remote credentials or remove the saved selection, namespace
 inventories, or namespace recency.

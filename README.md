@@ -9,6 +9,8 @@ discovery, cached selection, and offline restoration. The executable is `switche
 ## Setup
 
 - Supports Linux and macOS.
+- Install with Homebrew: `brew tap zoomoid/kubectxmgr https://github.com/zoomoid/kubectxmgr.git`
+  then `brew install zoomoid/kubectxmgr/kubectxmgr`.
 - Build with Go 1.27.4 or newer in the Go 1.27 series: `go install ./cmd/switcher`.
 - Configure stores and credentials using the [configuration](docs/configuration.md)
   and [provider](docs/providers.md) guides.
@@ -99,7 +101,9 @@ See [configuration](docs/configuration.md), [providers](docs/providers.md), and
 | `make release-check` / `make snapshot` | Validate / build release archives |
 
 Formatting and linting require golangci-lint v2; releases require GoReleaser v2.
-Release targets are Linux amd64/arm64 and macOS arm64.
+Release targets are Linux and macOS, both amd64 and arm64. Pushing a `v*` tag
+publishes a GitHub release. Stable tags also update the Homebrew formula on
+`main` in this repository; the release workflow needs write access to that branch.
 
 CLI packages live in [`internal/cmd`](internal/cmd), provider implementations in
 [`internal/provider`](internal/provider), and the entry point in

@@ -3,6 +3,21 @@
 Jobs run short-lived `discover --due` commands. There is no persistent application
 daemon and no shell-startup discovery process.
 
+## Homebrew
+
+The Homebrew formula registers a discovery job with `brew services`. Start it
+with `brew services start kubectxmgr` and manage it with `brew services list`,
+`brew services restart kubectxmgr`, or `brew services stop kubectxmgr`. Do not
+use `sudo`; the job should use your own configuration and credentials.
+Installation alone does not start the job.
+
+The job checks every 15 minutes with `switcher discover --due`, using launchd on
+macOS and a systemd user timer on Linux. Store refresh settings still decide when
+to scan. The job uses Homebrew's service PATH and does not capture shell
+environment variables. Use `switcher jobs install` instead if you need custom
+paths, environment capture, or shorter scheduling intervals. Stop and uninstall any
+native job with `switcher jobs uninstall` before switching to Homebrew.
+
 ## Management
 
 - `jobs template` prints the native files without installing anything.

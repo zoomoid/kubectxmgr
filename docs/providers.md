@@ -108,7 +108,9 @@ The default integration uses supported RK-API:
 - List `clusters.management.cattle.io/v3`, including all pages.
 - Create `kubeconfigs.ext.cattle.io/v1` only when a context is selected.
 - Capture the one-time `status.value` from creation immediately.
-- Request five-minute credentials and cache them for four minutes.
+- Use Rancher's `kubeconfig-default-token-ttl-minutes` setting instead of
+  requesting a fixed TTL. Cache generated credentials until shortly before
+  the lifetime returned by Rancher; skip the cache if no usable TTL is returned.
 - Keep each server's `local` cluster distinct through its store identity.
 
 Selected kubeconfigs use the cluster display name when present, falling back to
@@ -118,9 +120,17 @@ The picker uses the discovered display name even when an older cached context
 still contains the internal cluster ID.
 
 The public Kubeconfig API requires Rancher 2.12 or newer with the feature enabled
-and an active Rancher user permitted to create Kubeconfig resources. A server may
-enforce a shorter maximum token TTL; a rejected request is an actionable error,
-not an automatic weaker credential fallback.
+and an active Rancher user permitted to create Kubeconfig resources. Rancher
+controls token lifetime; reselect the context to obtain fresh credentials when
+they expire. Already exported kubeconfigs are not refreshed in place.
+
+Set `authorizedClusterEndpoint: true` under the Rancher store's `config` to
+require an [Authorized Cluster Endpoint](https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/manage-clusters/access-clusters/authorized-cluster-endpoint).
+Enable ACE on the downstream cluster first. The tool selects a direct context
+from the Rancher-generated kubeconfig, preserving its TLS and authentication
+settings. If Rancher returns no direct context, selection fails rather than
+falling back to the proxy. Leaving the option unset preserves Rancher's choice
+of current context. Use a separate store ID if you want both store configurations.
 
 Credential-creating POST requests are not retried automatically, including
 ambiguous network failures. Check the server before retrying. Expired server-side
@@ -131,3 +141,4 @@ For older deployments, `legacyAPI: true` explicitly selects the unsupported
 Rancher `/v3` API with a warning. Legacy discovery follows pagination and returned
 credential-generation action links. Modern API failures and permission errors
 never trigger automatic downgrade. Cross-origin legacy API links are rejected.
+Legacy credential caching remains four minutes.

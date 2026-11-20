@@ -36,3 +36,49 @@ release:
   github:
     owner: zoomoid
     name: kubectxmgr
+
+# brew services requires a formula rather than a cask.
+brews:
+  - name: kubectxmgr
+    directory: Formula
+    repository:
+      owner: zoomoid
+      name: kubectxmgr
+      branch: main
+    homepage: https://github.com/zoomoid/kubectxmgr
+    description: Kubernetes context switcher with cached cluster discovery
+    skip_upload: auto
+    extra_install: |
+      if OS.linux?
+        # Homebrew's interval timer has no boot or persistent calendar trigger.
+        (prefix/"#{service_name}.service").write <<~EOS
+          [Unit]
+          Description=Refresh kubectxmgr discovery snapshots
+
+          [Service]
+          Type=oneshot
+          Environment="PATH=#{HOMEBREW_PREFIX}/bin:#{HOMEBREW_PREFIX}/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+          ExecStart="#{opt_bin}/switcher" discover --due
+        EOS
+        (prefix/"#{service_name}.timer").write <<~EOS
+          [Unit]
+          Description=Schedule kubectxmgr discovery
+
+          [Timer]
+          OnCalendar=*-*-* *:00/15:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        EOS
+      end
+    service: |
+      run_type :interval
+      interval 900
+      if OS.mac?
+        run [opt_bin/"switcher", "discover", "--due"]
+        run_at_load true
+        environment_variables PATH: std_service_path_env
+      end
+    test: |
+      system bin/"switcher", "version"

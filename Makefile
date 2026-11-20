@@ -29,7 +29,8 @@ fmt-check:
 check: fmt-check vet test lint release-check
 
 release-check:
-	goreleaser check
+	# Exit 2 means valid but deprecated; brew services still requires a formula.
+	goreleaser check || test "$$?" -eq 2
 
 # Snapshot mode never publishes or requires release credentials.
 snapshot: release-check
