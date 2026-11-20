@@ -48,7 +48,7 @@ func NewEntry(ref state.Reference) shared.Entry {
 
 // NewFactory wires providers with automatic AKS and optional credential caching.
 // Filesystem discovery excludes application state and supplied cache directories;
-// Rancher manages its own short-lived cache to avoid duplicate token issuance.
+// Rancher manages its own cache to avoid duplicate token issuance.
 func NewFactory(disk state.Disk, log *slog.Logger, excluded ...string) Factory {
 	return func(s config.Store) (Provider, error) {
 		var p Provider

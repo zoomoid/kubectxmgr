@@ -144,17 +144,22 @@ func TestRestoreDoesNotExecuteCredentialHelpers(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRancherSelectionUsesClusterName(t *testing.T) {
+func TestRancherACESelectionUsesClusterName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("KUBECONFIG", "")
 
 	const clusterID = "c-m-5fqkrgwg"
 	const clusterName = "agones-dev"
+	const directEndpoint = "https://controlplane.example:6443"
 	source, err := clientcmd.Load(testutil.Kubeconfig("saved"))
 	require.NoError(t, err)
 	source.Contexts = map[string]*clientcmdapi.Context{clusterID: source.Contexts[source.CurrentContext]}
 	source.CurrentContext = clusterID
+	proxy := source.Contexts[clusterID]
+	source.Clusters[proxy.Cluster].Server = "https://rancher.example/k8s/clusters/" + clusterID
+	source.Clusters[clusterID+"-fqdn"] = &clientcmdapi.Cluster{Server: directEndpoint}
+	source.Contexts[clusterID+"-fqdn"] = &clientcmdapi.Context{Cluster: clusterID + "-fqdn", AuthInfo: proxy.AuthInfo, Namespace: "saved"}
 	data, err := clientcmd.Write(*source)
 	require.NoError(t, err)
 
@@ -194,8 +199,9 @@ func TestRancherSelectionUsesClusterName(t *testing.T) {
 			Kind: "rancher",
 			ID:   "test",
 			Config: config.Settings{
-				RancherAPIAddress: server.URL,
-				RancherToken:      "test-token",
+				RancherAPIAddress:         server.URL,
+				RancherToken:              "test-token",
+				AuthorizedClusterEndpoint: true,
 			},
 		}},
 	}
@@ -230,6 +236,7 @@ func TestRancherSelectionUsesClusterName(t *testing.T) {
 	require.Equal(t, clusterName, selected.CurrentContext)
 	require.Len(t, selected.Contexts, 1)
 	require.Equal(t, "saved", selected.Contexts[clusterName].Namespace)
+	require.Equal(t, directEndpoint, selected.Clusters[selected.Contexts[clusterName].Cluster].Server)
 
 	t.Setenv("KUBECONFIG", path)
 	out, _, err = invoke(t, "current-context")

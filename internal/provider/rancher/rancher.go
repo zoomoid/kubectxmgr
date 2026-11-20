@@ -1,4 +1,4 @@
-// Package rancher discovers Rancher clusters and manages short-lived kubeconfig issuance.
+// Package rancher discovers Rancher clusters and manages kubeconfig issuance.
 package rancher
 
 import (
@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,9 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
-// Rancher uses RK-API inventory and short-lived generated kubeconfigs by default.
+// Rancher uses RK-API inventory and generated kubeconfigs by default.
 // The unsupported v3 API requires explicit legacy configuration.
 type Rancher struct {
 	Store config.Store
@@ -146,8 +149,7 @@ func (p *Rancher) Discover(ctx context.Context) ([]state.Reference, error) {
 }
 
 // Materialize serializes credential issuance per reference and reuses an owned
-// unexpired cache entry. RK-API credentials request a five-minute TTL; generated
-// kubeconfigs are cached for four minutes. Failed creation is not automatically retried.
+// unexpired cache entry. Failed creation is not automatically retried.
 func (p *Rancher) Materialize(ctx context.Context, r state.Reference) ([]byte, error) {
 	disk := p.Disk
 	if p.Store.Cache != nil {
@@ -172,13 +174,18 @@ func (p *Rancher) Materialize(ctx context.Context, r state.Reference) ([]byte, e
 	}
 
 	var data []byte
+	var expires time.Time
 	if p.Store.Config.LegacyAPI {
 		data, err = p.legacyMaterialize(ctx, r)
+		expires = time.Now().Add(4 * time.Minute)
 	} else {
 		base, _, connectErr := p.connection()
 		err = connectErr
 		if err == nil {
 			var result struct {
+				Spec struct {
+					TTL int64 `json:"ttl"`
+				} `json:"spec"`
 				Status struct {
 					Value string `json:"value"`
 				} `json:"status"`
@@ -186,11 +193,17 @@ func (p *Rancher) Materialize(ctx context.Context, r state.Reference) ([]byte, e
 
 			// Creation returns the credential value once. Avoid a client that
 			// automatically retries this non-idempotent token-issuance request.
+			started := time.Now()
 			err = p.request(ctx, http.MethodPost, base+"/apis/ext.cattle.io/v1/kubeconfigs", map[string]any{
 				"apiVersion": "ext.cattle.io/v1", "kind": "Kubeconfig",
-				"spec": map[string]any{"clusters": []any{r.Metadata["cluster"]}, "currentContext": r.Metadata["cluster"], "ttl": int64(300), "description": "kubectxmgr"},
+				"spec": map[string]any{"clusters": []string{r.Metadata["cluster"]}, "currentContext": r.Metadata["cluster"], "description": "kubectxmgr"},
 			}, &result)
 			data = []byte(result.Status.Value)
+			if ttl := result.Spec.TTL; ttl > 0 && ttl <= math.MaxInt64/int64(time.Second) {
+				lifetime := time.Duration(ttl) * time.Second
+				// Count from before issuance, with margin for use after selection.
+				expires = started.Add(lifetime - min(time.Minute, lifetime/10))
+			}
 		}
 	}
 
@@ -202,11 +215,68 @@ func (p *Rancher) Materialize(ctx context.Context, r state.Reference) ([]byte, e
 		return nil, errors.New("Rancher returned no one-time kubeconfig value")
 	}
 
-	if err := state.Atomic(path, state.Credentials{Owner: "kubectxmgr", Key: key, Version: state.Version, Expires: time.Now().Add(4 * time.Minute), Data: data}); err != nil {
-		return nil, err
+	if p.Store.Config.AuthorizedClusterEndpoint {
+		data, err = selectAuthorizedClusterEndpoint(data, r.Metadata["cluster"])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if time.Now().Before(expires) {
+		if err := state.Atomic(path, state.Credentials{Owner: "kubectxmgr", Key: key, Version: state.Version, Expires: expires, Data: data}); err != nil {
+			return nil, err
+		}
 	}
 
 	return data, nil
+}
+
+func selectAuthorizedClusterEndpoint(data []byte, clusterID string) ([]byte, error) {
+	cfg, err := clientcmd.Load(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// ACE contexts are named after the target's proxy context, with a suffix
+	// for its FQDN or node. An RK-API config also includes Rancher's own API context.
+	var proxyNames []string
+	for name, ctx := range cfg.Contexts {
+		if ctx == nil || cfg.Clusters[ctx.Cluster] == nil {
+			continue
+		}
+		server, err := url.Parse(cfg.Clusters[ctx.Cluster].Server)
+		if err == nil && strings.TrimRight(server.Path, "/") == "/k8s/clusters/"+clusterID {
+			proxyNames = append(proxyNames, name)
+		}
+	}
+
+	var direct []string
+	for name, ctx := range cfg.Contexts {
+		if ctx == nil || cfg.Clusters[ctx.Cluster] == nil || cfg.AuthInfos[ctx.AuthInfo] == nil {
+			continue
+		}
+		if !slices.ContainsFunc(proxyNames, func(proxy string) bool { return strings.HasPrefix(name, proxy+"-") }) {
+			continue
+		}
+		server, err := url.Parse(cfg.Clusters[ctx.Cluster].Server)
+		if err != nil || server.Scheme != "https" || server.Hostname() == "" || server.User != nil ||
+			server.RawQuery != "" || server.Fragment != "" || (server.Path != "" && server.Path != "/") {
+			continue
+		}
+		direct = append(direct, name)
+	}
+
+	if len(direct) == 0 {
+		return nil, errors.New("Rancher kubeconfig has no authorized cluster endpoint; enable it on the downstream cluster")
+	}
+
+	// RK-API sets the direct context by default; legacy responses can select the proxy.
+	if !slices.Contains(direct, cfg.CurrentContext) {
+		slices.Sort(direct)
+		cfg.CurrentContext = direct[0]
+	}
+
+	return clientcmd.Write(*cfg)
 }
 
 type legacyCluster struct {

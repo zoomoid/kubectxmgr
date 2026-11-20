@@ -63,20 +63,21 @@ type Cache struct {
 
 // Settings contains provider-specific options; validation rejects cross-provider fields.
 type Settings struct {
-	GCPAccount        string   `yaml:"gcpAccount,omitempty"`
-	Authentication    *Auth    `yaml:"authentication,omitempty"`
-	OldAuthentication *Auth    `yaml:"Authentication,omitempty"`
-	ProjectIDs        []string `yaml:"projectIDs,omitempty"`
-	PreferredEndpoint string   `yaml:"preferredEndpoint,omitempty"`
-	Profile           string   `yaml:"profile,omitempty"`
-	Region            string   `yaml:"region,omitempty"`
-	SubscriptionID    string   `yaml:"subscriptionID,omitempty"`
-	ResourceGroups    []string `yaml:"resourceGroups,omitempty"`
-	Endpoint          string   `yaml:"endpoint,omitempty"`
-	RancherAPIAddress string   `yaml:"rancherAPIAddress,omitempty"`
-	RancherToken      string   `yaml:"rancherToken,omitempty"`
-	RancherTokenFile  string   `yaml:"rancherTokenFile,omitempty"`
-	LegacyAPI         bool     `yaml:"legacyAPI,omitempty"`
+	GCPAccount                string   `yaml:"gcpAccount,omitempty"`
+	Authentication            *Auth    `yaml:"authentication,omitempty"`
+	OldAuthentication         *Auth    `yaml:"Authentication,omitempty"`
+	ProjectIDs                []string `yaml:"projectIDs,omitempty"`
+	PreferredEndpoint         string   `yaml:"preferredEndpoint,omitempty"`
+	Profile                   string   `yaml:"profile,omitempty"`
+	Region                    string   `yaml:"region,omitempty"`
+	SubscriptionID            string   `yaml:"subscriptionID,omitempty"`
+	ResourceGroups            []string `yaml:"resourceGroups,omitempty"`
+	Endpoint                  string   `yaml:"endpoint,omitempty"`
+	RancherAPIAddress         string   `yaml:"rancherAPIAddress,omitempty"`
+	RancherToken              string   `yaml:"rancherToken,omitempty"`
+	RancherTokenFile          string   `yaml:"rancherTokenFile,omitempty"`
+	LegacyAPI                 bool     `yaml:"legacyAPI,omitempty"`
+	AuthorizedClusterEndpoint bool     `yaml:"authorizedClusterEndpoint,omitempty"`
 }
 
 // Auth selects GKE authentication through ADC, gcloud, or a service-account file.
@@ -470,7 +471,7 @@ func (s Store) validateSettings() error {
 		"gke":        "gcpAccount authentication projectIDs preferredEndpoint",
 		"eks":        "profile region",
 		"azure":      "subscriptionID resourceGroups endpoint",
-		"rancher":    "rancherAPIAddress rancherToken rancherTokenFile legacyAPI",
+		"rancher":    "rancherAPIAddress rancherToken rancherTokenFile legacyAPI authorizedClusterEndpoint",
 	}
 
 	b, err := yaml.Marshal(s.Config)
