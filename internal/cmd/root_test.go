@@ -97,7 +97,7 @@ func TestIncompleteOptionalStoreBlocksExecution(t *testing.T) {
 	configPath := filepath.Join(dir, "switch.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte("kind: SwitchConfig\nversion: v1alpha1\nkubeconfigStores:\n- kind: filesystem\n  required: false\n  paths: ["+filepath.Join(dir, "missing")+"]\n"), 0600))
 	_, stderr, err := invoke(t, "--state-directory", filepath.Join(dir, "state"), "--config-path", configPath, "exec", "--dry-run", "*", "--", "true")
-	require.ErrorContains(t, err, "fresh complete discovery")
+	require.ErrorContains(t, err, "fresh discovery")
 	require.Contains(t, stderr, "level=WARN")
 	require.NotContains(t, stderr, "level=INFO")
 }
@@ -123,7 +123,7 @@ func TestExecDiscoveryVerbosityAndTargetHeaders(t *testing.T) {
 		require.NotContains(t, stderr, "\x1b", "redirected output must not contain styling or progress escapes")
 		if verbose {
 			require.Contains(t, stderr, `msg="discovering store"`)
-			require.Contains(t, stderr, `msg="published complete store inventory"`)
+			require.Contains(t, stderr, `msg="published store inventory"`)
 		} else {
 			require.NotContains(t, stderr, "level=INFO")
 			require.NotContains(t, stderr, "Refreshing state")

@@ -47,7 +47,7 @@ func New(options *shared.Options) *cobra.Command {
 
 			refs, err := refresh(cmd, options, engine, progress)
 			if err != nil {
-				return fmt.Errorf("execution requires fresh complete discovery of every store: %w", err)
+				return fmt.Errorf("execution requires fresh discovery of every store: %w", err)
 			}
 
 			targets, err := execution.Plan(refs, args[0], mode, engine.Config.ExecShell, args[1:])

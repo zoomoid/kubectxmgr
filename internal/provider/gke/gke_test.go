@@ -1,7 +1,9 @@
 package gke
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -13,7 +15,9 @@ import (
 	"github.com/zoomoid/kubectxmgr/internal/state"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -24,15 +28,47 @@ type gkeServer struct {
 }
 
 func (s *gkeServer) ListClusters(_ context.Context, r *pb.ListClustersRequest) (*pb.ListClustersResponse, error) {
+	if r.GetParent() == "projects/denied/locations/-" {
+		return nil, status.Error(codes.PermissionDenied, "container.clusters.list denied")
+	}
+
 	result := &pb.ListClustersResponse{Clusters: []*pb.Cluster{{
 		Name: "one", Location: "region", Endpoint: "127.0.0.1",
 		MasterAuth: &pb.MasterAuth{ClusterCaCertificate: "Y2E="},
 	}}}
-	if s.missing.Load() {
+	if s.missing.Load() || r.GetParent() == "projects/partial/locations/-" {
 		result.MissingZones = []string{"unavailable-zone"}
 	}
 
 	return result, nil
+}
+
+func TestGKEDiscoverySkipsFailedProjects(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	pb.RegisterClusterManagerServer(server, &gkeServer{})
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); require.NoError(t, <-done) })
+
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	p := &GKE{
+		Store:         config.Store{Kind: "gke", ID: "test", Config: config.Settings{ProjectIDs: []string{"denied", "partial", "healthy"}}},
+		ClientOptions: []option.ClientOption{option.WithGRPCConn(connection)},
+		Log:           slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+
+	refs, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	require.Contains(t, refs[0].ID, "projects/healthy/")
+	require.Contains(t, logs.String(), "project=denied")
+	require.Contains(t, logs.String(), "PermissionDenied")
+	require.Contains(t, logs.String(), "project=partial")
+	require.Contains(t, logs.String(), "missing zones")
 }
 
 func (s *gkeServer) GetCluster(context.Context, *pb.GetClusterRequest) (*pb.Cluster, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ import (
 type GKE struct {
 	Store         config.Store
 	ClientOptions []option.ClientOption
+	Log           *slog.Logger
 }
 
 // Entry presents a GKE cluster independently of its generated kubeconfig context.
@@ -102,8 +104,7 @@ func (p *GKE) options(ctx context.Context) ([]option.ClientOption, error) {
 }
 
 // Discover searches visible active projects when needed, then lists all cluster
-// locations in every project. Reported missing zones make the scan incomplete
-// even if the API call itself succeeded.
+// locations in every project. Projects that fail or report missing zones are skipped.
 func (p *GKE) Discover(ctx context.Context) ([]state.Reference, error) {
 	options, err := p.options(ctx)
 	if err != nil {
@@ -140,35 +141,63 @@ func (p *GKE) Discover(ctx context.Context) ([]state.Reference, error) {
 	}
 
 	var refs []state.Reference
+	var projectErrors []error
+	log := p.Log
+	if log == nil {
+		log = slog.Default()
+	}
+
 	for _, project := range projects {
-		result, err := client.ListClusters(ctx, &pb.ListClustersRequest{Parent: "projects/" + project + "/locations/-"})
+		projectRefs, err := p.discoverProject(ctx, client, project)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		if err != nil {
-			return nil, err
+			log.WarnContext(ctx, "skipping GKE project during discovery", "store", p.Store.Key(), "project", project, "error", err)
+			projectErrors = append(projectErrors, fmt.Errorf("project %s: %w", project, err))
+			continue
 		}
 
-		if len(result.MissingZones) != 0 {
-			return nil, fmt.Errorf("project %s incomplete: missing zones %s", project, strings.Join(result.MissingZones, ", "))
+		refs = append(refs, projectRefs...)
+	}
+
+	if len(projectErrors) > 0 && len(projectErrors) == len(projects) {
+		return nil, fmt.Errorf("all GKE projects failed discovery: %w", errors.Join(projectErrors...))
+	}
+
+	return refs, nil
+}
+
+func (p *GKE) discoverProject(ctx context.Context, client *container.ClusterManagerClient, project string) ([]state.Reference, error) {
+	result, err := client.ListClusters(ctx, &pb.ListClustersRequest{Parent: "projects/" + project + "/locations/-"})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(result.MissingZones) != 0 {
+		return nil, fmt.Errorf("missing zones %s", strings.Join(result.MissingZones, ", "))
+	}
+
+	var refs []state.Reference
+	for _, cluster := range result.Clusters {
+		location := cluster.GetLocation()
+		if location == "" {
+			return nil, errors.New("GKE returned a cluster without a location")
 		}
 
-		for _, cluster := range result.Clusters {
-			location := cluster.GetLocation()
-			if location == "" {
-				return nil, errors.New("GKE returned a cluster without a location")
-			}
-
-			endpoint, ca, err := clusterConnection(cluster, p.Store.Config.PreferredEndpoint)
-			if err != nil {
-				return nil, err
-			}
-
-			id := "projects/" + project + "/locations/" + location + "/clusters/" + cluster.GetName()
-			r := shared.Reference(p.Store, id, "gke_"+project+"_"+location+"_"+cluster.GetName(), map[string]string{
-				"resource": id, "endpoint": endpoint, "ca": ca,
-			})
-			// Search labels stay qualified; isolated kubeconfigs use the cluster name.
-			r.Context = cluster.GetName()
-			refs = append(refs, r)
+		endpoint, ca, err := clusterConnection(cluster, p.Store.Config.PreferredEndpoint)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %s: %w", cluster.GetName(), err)
 		}
+
+		id := "projects/" + project + "/locations/" + location + "/clusters/" + cluster.GetName()
+		r := shared.Reference(p.Store, id, "gke_"+project+"_"+location+"_"+cluster.GetName(), map[string]string{
+			"resource": id, "endpoint": endpoint, "ca": ca,
+		})
+		// Search labels stay qualified; isolated kubeconfigs use the cluster name.
+		r.Context = cluster.GetName()
+		refs = append(refs, r)
 	}
 
 	return refs, nil

@@ -54,8 +54,9 @@ and kubeconfig path; `--machine` prints only the path. Use `--help` for all flag
 
 ## Caching and sessions
 
-- Discovery publishes only complete per-store snapshots. Failed refreshes retain
-  previous data; readers do not wait for discovery locks.
+- Failed store refreshes retain previous data. GKE can publish results from
+  successful projects while logging errors for failed projects. Readers do not
+  wait for discovery locks.
 - AKS discovery prefetches user kubeconfigs into a private one-hour cache so valid
   selections need no Azure request. Run `switcher discover` once after upgrading.
 - Namespace lists open from cache and refresh in the background. The first uncached
@@ -69,7 +70,8 @@ and kubeconfig path; `--machine` prints only the path. Use `--help` for all flag
   when credentials expire.
 - Session files are not automatically deleted. Remove only files no longer in use.
 
-Execution and dry-run require fresh, complete discovery of every configured store.
+Execution and dry-run require fresh discovery of every configured store and omit
+failed GKE projects as described in the [provider guide](docs/providers.md).
 Execution preserves arguments without an implicit shell and stops on the first failure.
 It shows a temporary refresh spinner and a cluster/command header on stderr;
 `--verbose` also shows discovery logs. Redirected output has no progress or color codes.

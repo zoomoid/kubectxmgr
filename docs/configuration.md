@@ -62,8 +62,9 @@ existing inventory merely because it is old.
 
 Snapshots are versioned YAML files, keyed by store ID with a configuration
 fingerprint. Changed scopes/configuration do not silently reuse incompatible
-inventories. Successful empty snapshots are retained. Failed attempts are stored
-separately and cannot replace a complete inventory.
+inventories. Successful empty snapshots are retained. Failed store attempts are
+stored separately and cannot replace an existing inventory. GKE can publish
+results from successful projects while logging warnings for skipped projects.
 
 Explicit filesystem credential caches for filesystem/GKE/EKS stores last one
 hour. AKS user kubeconfigs are cached automatically for one hour and prefetched

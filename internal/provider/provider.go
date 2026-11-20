@@ -20,7 +20,7 @@ import (
 // Provider separates metadata discovery from potentially credential-issuing work.
 type Provider interface {
 	// Discover returns all visible references in the configured scope or an error.
-	// Partial results must not be reported as a successful inventory.
+	// GKE can skip failed projects, logging a warning for each.
 	Discover(context.Context) ([]state.Reference, error)
 
 	// Materialize obtains kubeconfig bytes for a previously discovered reference.
@@ -56,7 +56,7 @@ func NewFactory(disk state.Disk, log *slog.Logger, excluded ...string) Factory {
 		case "filesystem":
 			p = &filesystem.Filesystem{Store: s, Exclude: disk.Root, ExcludePaths: excluded}
 		case "gke":
-			p = &gke.GKE{Store: s}
+			p = &gke.GKE{Store: s, Log: log}
 		case "eks":
 			p = &eks.EKS{Store: s}
 		case "azure":

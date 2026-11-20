@@ -35,8 +35,11 @@ bound through `GOOGLE_APPLICATION_CREDENTIALS`. Combining `gcpAccount` with
 service-account authentication is rejected.
 
 Discovery uses Resource Manager v3 and Container v1, enumerates all project pages,
-and lists all cluster locations. A nonempty GKE `missingZones` response is
-incomplete even when HTTP/gRPC succeeded. Missing preferred endpoints are errors.
+and lists all cluster locations. Discovery logs a warning and omits the entire
+project if its cluster scan fails, including when GKE reports `missingZones` or a
+preferred endpoint is unavailable. The new inventory includes only projects that
+were scanned successfully. If all projects fail, discovery returns an error and
+retains the previous inventory.
 DNS endpoints use system TLS roots; IP endpoints use the cluster CA.
 Discovery persists the selected endpoint and public CA alongside the resource
 identity. Selection builds kubeconfigs locally from that metadata without loading

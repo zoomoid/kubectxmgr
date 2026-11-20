@@ -122,7 +122,7 @@ func (e *Engine) scan(ctx context.Context, s config.Store, due, prefetch bool) (
 		Version: state.Version, Fingerprint: s.Fingerprint(), Complete: true, Discovered: time.Now().UTC(), References: refs,
 	})
 	if err == nil {
-		e.Log.Info("published complete store inventory", "store", s.Key(), "contexts", len(refs))
+		e.Log.Info("published store inventory", "store", s.Key(), "contexts", len(refs))
 	}
 
 	return refs, false, err
@@ -162,7 +162,7 @@ func (e *Engine) Run(ctx context.Context, due, exhaustive bool) ([]state.Referen
 	var errs []error
 	for result := range results {
 		if result.Error != nil {
-			e.Log.Warn("store discovery incomplete; retaining last complete inventory", "store", result.Store.Key(), "error", result.Error)
+			e.Log.Warn("store discovery failed; retaining previous inventory", "store", result.Store.Key(), "error", result.Error)
 			if exhaustive || result.Store.IsRequired() {
 				errs = append(errs, fmt.Errorf("%s: %w", result.Store.Key(), result.Error))
 			}

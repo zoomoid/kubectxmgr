@@ -13,7 +13,7 @@ func New(options *shared.Options) *cobra.Command {
 	var due bool
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Discover all configured scopes and publish complete store inventories",
+		Short: "Discover configured scopes and publish store inventories",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			engine, err := options.Engine(cmd)
